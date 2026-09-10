@@ -231,7 +231,9 @@ Equipment.Bases = {
 		minRarity = "uncommon",
 		maxRarity = "legendary",
 		requiredLevel = 28,
-		baseStats = { flat = { capacity = 60, instabilityResist = 0.12 } },
+		-- Comfortably above the tier-2 Bulk Reservoir's raw capacity, and without its
+		-- speed penalty: a level-28 base must not lose to a level-16 one.
+		baseStats = { flat = { capacity = 115, instabilityResist = 0.12 } },
 		flavour = "Slows the climb. Buys you the one extra capture that decides a run.",
 		dropRegions = { "city_region", "mountain_region", "underground_network" },
 		icon = "cell_damped",

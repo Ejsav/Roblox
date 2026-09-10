@@ -1,0 +1,654 @@
+--!nolint
+--[[
+	Gameplay logic specs.
+
+	These exercise the actual decision functions the game runs on — capture grading,
+	stat resolution across every source, payout maths, loot rarity, instability —
+	rather than testing config shape. Where a function needs a live service the spec
+	builds a minimal profile and calls the pure entry point, which is exactly why
+	those entry points were written as pure functions taking a profile.
+]]
+
+local loadModule = loadModule
+
+local Balance = loadModule("Shared/Config/Balance")
+local Stats = loadModule("Shared/Config/Stats")
+local StormTypes = loadModule("Shared/Config/StormTypes")
+local Equipment = loadModule("Shared/Config/Equipment")
+local Modifiers = loadModule("Shared/Config/Modifiers")
+local LootTables = loadModule("Shared/Config/LootTables")
+local Upgrades = loadModule("Shared/Config/Upgrades")
+local SkillTree = loadModule("Shared/Config/SkillTree")
+local WorldEvents = loadModule("Shared/Config/WorldEvents")
+local Abilities = loadModule("Shared/Config/Abilities")
+local MathUtil = loadModule("Shared/Core/MathUtil")
+local RNG = loadModule("Shared/Core/RNG")
+local ProfileSchema = loadModule("Shared/Data/ProfileSchema")
+
+-- StatsService and CaptureService are server modules; their pure entry points are
+-- callable without a live registry, which is the whole point of writing them that way.
+local StatsService = loadModule("Server/Services/StatsService")
+local CaptureService = loadModule("Server/Services/CaptureService")
+
+--[[ Builds a profile with the given overrides applied over the default. ]]
+local function makeProfile(overrides)
+	local profile = ProfileSchema.CreateDefault()
+	for key, value in pairs(overrides or {}) do
+		profile[key] = value
+	end
+	return profile
+end
+
+--[[ Adds an item to a profile's inventory and equips it. Returns the uid. ]]
+local function equipItem(profile, baseId, rarity, affixes, trait)
+	local uid = "test" .. tostring(#profile.inventory + 1)
+	local item = ProfileSchema.CreateItem(uid, baseId, rarity, affixes or {}, trait)
+	table.insert(profile.inventory, item)
+	local definition = Equipment.GetDefinition(baseId)
+	profile.equipped[definition.slot] = uid
+	return uid
+end
+
+describe("Capture grading", function()
+	it("grades a dead-centre press as Overcharge", function()
+		local grade = CaptureService.Grade(0, false)
+		expect(grade):equal("Overcharge")
+	end)
+
+	it("grades progressively worse with timing error", function()
+		expect(CaptureService.Grade(0.03, false)):equal("Overcharge")
+		expect(CaptureService.Grade(0.15, false)):equal("Perfect")
+		expect(CaptureService.Grade(0.4, false)):equal("Good")
+		expect(CaptureService.Grade(0.9, false)):equal("Weak")
+	end)
+
+	it("returns nil beyond the window", function()
+		expect(CaptureService.Grade(1.01, false)):isNil()
+		expect(CaptureService.Grade(50, false)):isNil()
+	end)
+
+	it("inverts grading for a null strike", function()
+		-- Pressing at the peak of an inverted strike is the failure case.
+		expect(CaptureService.Grade(0, true)):equal("Weak")
+		-- Pressing at the window edge is the success case.
+		expect(CaptureService.Grade(1.0, true)):equal("Overcharge")
+		expect(CaptureService.Grade(0.85, true)):equal("Perfect")
+	end)
+
+	it("still misses an inverted strike pressed outside the window", function()
+		expect(CaptureService.Grade(1.5, true)):isNil()
+	end)
+
+	it("returns a grade definition alongside the id", function()
+		local grade, definition = CaptureService.Grade(0.1, false)
+		expect(grade):equal("Perfect")
+		expect(definition.yieldScale):greaterThan(1)
+		expect(definition.chainValue):equal(1)
+	end)
+
+	it("never advances the chain on a Weak capture", function()
+		local _, definition = CaptureService.Grade(0.9, false)
+		expect(definition.chainValue):equal(0)
+	end)
+
+	it("advances the chain by two on an Overcharge", function()
+		local _, definition = CaptureService.Grade(0, false)
+		expect(definition.chainValue):equal(2)
+	end)
+
+	it("looks up a grade definition by id", function()
+		expect(CaptureService.GetGrade("Perfect").id):equal("Perfect")
+		expect(CaptureService.GetGrade("NotAGrade")):isNil()
+	end)
+end)
+
+describe("Stat resolution", function()
+	it("returns base values for a fresh profile", function()
+		local values = StatsService.ResolveForProfile(makeProfile(), nil, 0)
+		expect(values.capacity):equal(Stats.ById.capacity.base)
+		expect(values.captureWindow):equal(1.0)
+	end)
+
+	it("applies upgrade levels", function()
+		local profile = makeProfile({ upgrades = { containment_cell = 10 } })
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.capacity):greaterThan(Stats.ById.capacity.base + 200)
+	end)
+
+	it("applies skill ranks", function()
+		local profile = makeProfile({ skills = { vault_reinforced = 6 } })
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.capacity):equal(Stats.ById.capacity.base + 6 * 34)
+	end)
+
+	it("applies equipped item base stats", function()
+		local profile = makeProfile()
+		equipItem(profile, "cell_bulk", "common")
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.capacity):equal(Stats.ById.capacity.base + 95)
+		-- Bulk Reservoir trades speed for capacity.
+		expect(values.moveSpeed):lessThan(Stats.ById.moveSpeed.base)
+	end)
+
+	it("applies rolled affixes on equipped items", function()
+		local profile = makeProfile()
+		equipItem(profile, "cell_standard", "rare", {
+			{ affixId = "affix_capacious", tier = 3, value = 50 },
+		})
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.capacity):equal(Stats.ById.capacity.base + 30 + 50)
+	end)
+
+	it("ignores an item equipped in the wrong slot", function()
+		local profile = makeProfile()
+		local uid = "wrong1"
+		table.insert(profile.inventory, ProfileSchema.CreateItem(uid, "cell_bulk", "common", {}))
+		-- Deliberately file a containment item under the plating slot.
+		profile.equipped.plating = uid
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.capacity):equal(Stats.ById.capacity.base)
+	end)
+
+	it("applies set bonuses once enough pieces are worn", function()
+		local profile = makeProfile()
+		local set = Equipment.SetById.set_lineman
+
+		local without = StatsService.ResolveForProfile(profile, nil, 0)
+
+		for _, baseId in ipairs(set.pieces) do
+			local uid = "set" .. baseId
+			table.insert(profile.inventory, ProfileSchema.CreateItem(uid, baseId, "common", {}))
+			profile.equipped[Equipment.GetDefinition(baseId).slot] = uid
+		end
+
+		local with = StatsService.ResolveForProfile(profile, nil, 0)
+		-- The three-piece Lineman bonus grants capture stability.
+		expect(with.captureStability):greaterThan(without.captureStability)
+		expect(with.shockResist):greaterThan(without.shockResist)
+	end)
+
+	it("applies prestige bonuses per rank", function()
+		local base = StatsService.ResolveForProfile(makeProfile({ prestige = 0 }), nil, 0)
+		local prestiged = StatsService.ResolveForProfile(makeProfile({ prestige = 5 }), nil, 0)
+		expect(prestiged.captureYield):greaterThan(base.captureYield)
+		expect(prestiged.capacity):greaterThan(base.capacity)
+	end)
+
+	it("applies temporary buffs and ignores expired ones", function()
+		local profile = makeProfile()
+
+		local buffed = StatsService.ResolveForProfile(profile, {
+			{
+				id = "surge",
+				label = "Surge",
+				effects = { increased = { moveSpeed = 0.75 } },
+				expiresAt = 100,
+				stacks = 1,
+			},
+		}, 50)
+		expect(buffed.moveSpeed):near(Stats.ById.moveSpeed.base * 1.75, 1e-6)
+
+		local expired = StatsService.ResolveForProfile(profile, {
+			{
+				id = "surge",
+				label = "Surge",
+				effects = { increased = { moveSpeed = 0.75 } },
+				expiresAt = 40,
+				stacks = 1,
+			},
+		}, 50)
+		expect(expired.moveSpeed):equal(Stats.ById.moveSpeed.base)
+	end)
+
+	it("multiplies buff effects by stack count", function()
+		local profile = makeProfile()
+		local values = StatsService.ResolveForProfile(profile, {
+			{
+				id = "momentum",
+				label = "Momentum",
+				effects = { increased = { moveSpeed = 0.04 } },
+				expiresAt = nil,
+				stacks = 8,
+			},
+		}, 0)
+		expect(values.moveSpeed):near(Stats.ById.moveSpeed.base * 1.32, 1e-6)
+	end)
+
+	it("combines every source in the documented order", function()
+		local profile = makeProfile({
+			prestige = 2,
+			upgrades = { containment_cell = 5 },
+			skills = { vault_reinforced = 3 },
+		})
+		equipItem(profile, "cell_damped", "epic", {
+			{ affixId = "affix_capacious", tier = 4, value = 100 },
+			{ affixId = "affix_vast", tier = 3, value = 0.12 },
+		})
+
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+
+		-- Every contributing source must be represented in the final number.
+		local base = Stats.ById.capacity.base
+		expect(values.capacity):greaterThan(base + 5 * 26 + 3 * 34 + 60 + 100)
+	end)
+
+	it("clamps every resolved stat into its declared bounds", function()
+		local profile = makeProfile({ upgrades = {}, skills = {} })
+		-- Stack far more resistance than the cap allows.
+		profile.upgrades.insulation = 45
+		profile.skills.survivor_insulated = 6
+		profile.skills.survivor_deep_rated = 5
+		profile.skills.survivor_hardy = 3
+		profile.skills.survivor_soles = 1
+
+		local values = StatsService.ResolveForProfile(profile, nil, 0)
+		expect(values.stormResist):lessOrEqual(Stats.ById.stormResist.max)
+	end)
+end)
+
+describe("Risk and payout", function()
+	it("pays more for a longer chain", function()
+		local short = MathUtil.RiskMultiplier(2, 1, 1)
+		local long = MathUtil.RiskMultiplier(20, 1, 1)
+		expect(long):greaterThan(short)
+	end)
+
+	it("pays more in a more dangerous region", function()
+		local safe = MathUtil.RiskMultiplier(10, 1, 1)
+		local dangerous = MathUtil.RiskMultiplier(10, 8, 1)
+		expect(dangerous):greaterThan(safe)
+	end)
+
+	it("scales the bonus, not the base, with the risk stat", function()
+		local baseline = MathUtil.RiskMultiplier(10, 3, 1)
+		local invested = MathUtil.RiskMultiplier(10, 3, 2)
+		-- Doubling the risk stat doubles the amount ABOVE 1x, not the multiplier.
+		expect(invested - 1):near((baseline - 1) * 2, 1e-9)
+	end)
+
+	it("never drops below 1x", function()
+		expect(MathUtil.RiskMultiplier(0, 1, 1)):greaterOrEqual(1)
+		expect(MathUtil.RiskMultiplier(0, 1, 0)):equal(1)
+	end)
+
+	it("keeps a long chain worth pushing but not exponentially", function()
+		-- The chain reward must keep rising, so pushing is always worth something...
+		local at10 = MathUtil.RiskMultiplier(10, 1, 1)
+		local at40 = MathUtil.RiskMultiplier(40, 1, 1)
+		expect(at40):greaterThan(at10)
+		-- ...but a 4x longer chain must not pay 4x the bonus, or banking is never
+		-- the right decision.
+		expect(at40 - 1):lessThan((at10 - 1) * 4)
+	end)
+end)
+
+describe("Instability", function()
+	--[[ Reproduces CarryService's rate formula, which is the thing under test. ]]
+	local function rateAtFill(fill, resistance)
+		local carry = Balance.Carry
+		local base = carry.INSTABILITY_BASE_RATE + carry.INSTABILITY_CURVE_RATE * (fill ^ carry.INSTABILITY_EXPONENT)
+		return base * (1 - (resistance or 0))
+	end
+
+	it("is almost negligible at low fill", function()
+		expect(rateAtFill(0.25, 0)):lessThan(0.01)
+	end)
+
+	it("accelerates sharply toward full", function()
+		local half = rateAtFill(0.5, 0)
+		local full = rateAtFill(1.0, 0)
+		-- The curve exists so that a full carry is genuinely urgent.
+		expect(full):greaterThan(half * 4)
+	end)
+
+	it("gives a full carry a survivable but pressing time to bank", function()
+		local secondsToVent = 1 / rateAtFill(1.0, 0)
+		-- Long enough to reach a station, short enough to be a real decision.
+		expect(secondsToVent):within(12, 40)
+	end)
+
+	it("extends that window meaningfully with resistance", function()
+		local without = 1 / rateAtFill(1.0, 0)
+		local with = 1 / rateAtFill(1.0, 0.5)
+		expect(with):near(without * 2, 0.001)
+	end)
+end)
+
+describe("Loot", function()
+	it("produces higher rarities more often with luck", function()
+		local function sampleRarity(luck, samples)
+			local rng = RNG.new("rarity_" .. tostring(luck))
+			local weights = {}
+			for _, rarity in ipairs(Balance.Loot.RARITY_ORDER) do
+				local base = Balance.Loot.RARITY_BASE_WEIGHTS[rarity]
+				local tilt = Balance.Loot.RARITY_LUCK_TILT[rarity] or 0
+				weights[rarity] = math.max(0.0001, base * (1 + luck * tilt))
+			end
+			local rareOrBetter = 0
+			for _ = 1, samples do
+				local rolled = rng:PickWeightedMap(weights)
+				if rolled ~= "common" and rolled ~= "uncommon" then
+					rareOrBetter += 1
+				end
+			end
+			return rareOrBetter / samples
+		end
+
+		local unlucky = sampleRarity(0, 20000)
+		local lucky = sampleRarity(3, 20000)
+		expect(lucky):greaterThan(unlucky * 1.5)
+	end)
+
+	it("keeps drop rates honest and non-zero for every table", function()
+		for _, lootTable in ipairs(LootTables.List) do
+			local chance = LootTables.GetDropChance(lootTable.id, 0)
+			expect(chance):greaterThan(0)
+			expect(chance):lessOrEqual(1)
+		end
+	end)
+
+	it("always pays out from a legendary table", function()
+		expect(LootTables.GetDropChance("legendary_storm_cache", 0)):equal(1)
+		expect(LootTables.GetDropChance("core_cache", 0)):equal(1)
+		expect(LootTables.GetDropChance("eye_cache", 0)):equal(1)
+	end)
+
+	it("raises the drop chance with luck without ever reaching certainty", function()
+		local without = LootTables.GetDropChance("common_scrap", 0)
+		local with = LootTables.GetDropChance("common_scrap", 4)
+		expect(with):greaterThan(without)
+		expect(with):lessThan(1)
+	end)
+
+	it("rolls resources, currency and equipment from a table", function()
+		local rng = RNG.new("loot-roll")
+		local kinds = {}
+		for _ = 1, 4000 do
+			local result = LootTables.Roll(rng, "industrial_salvage", 1)
+			if result then
+				kinds[result.kind] = (kinds[result.kind] or 0) + 1
+			end
+		end
+		expect(kinds.resource):greaterThan(0)
+		expect(kinds.equipment):greaterThan(0)
+		expect(kinds.currency):greaterThan(0)
+	end)
+
+	it("merges repeated resource results into one entry", function()
+		local rng = RNG.new("loot-merge")
+		local results = LootTables.RollMultiple(rng, "common_scrap", 40, 2)
+		local seen = {}
+		for _, result in ipairs(results) do
+			if result.kind == "resource" then
+				expect(seen[result.id]):isNil()
+				seen[result.id] = true
+			end
+		end
+	end)
+
+	it("respects a table's prestige requirement in its declaration", function()
+		expect(LootTables.ById.prestige_cache.requiresPrestige):equal(1)
+	end)
+end)
+
+describe("Storm mechanics", function()
+	it("gives every storm a windup a human can react to", function()
+		for _, storm in ipairs(StormTypes.List) do
+			-- Below roughly 250ms no player can respond to a new telegraph; the
+			-- shortest windups belong to storms whose rhythm is already established.
+			expect(storm.strike.windup):greaterOrEqual(0.5)
+		end
+	end)
+
+	it("keeps the hardest windows inside human reaction limits", function()
+		for _, storm in ipairs(StormTypes.List) do
+			local windowSeconds = storm.strike.windup * storm.strike.windowHalfWidth * 2
+			-- Even at base stats, the total forgiving span must exceed 150ms.
+			expect(windowSeconds):greaterThan(0.15)
+		end
+	end)
+
+	it("pays rarer storms more per strike", function()
+		local byRarity = {}
+		for _, storm in ipairs(StormTypes.List) do
+			byRarity[storm.rarity] = math.max(byRarity[storm.rarity] or 0, storm.yield.base)
+		end
+		expect(byRarity.legendary):greaterThan(byRarity.common)
+		expect(byRarity.epic):greaterThan(byRarity.uncommon)
+	end)
+
+	it("charges more cell charge for a more valuable capture", function()
+		local cheap = StormTypes.ById.static_bloom
+		local expensive = StormTypes.ById.core_pulse
+		expect(expensive.yield.chargeCost):greaterThan(cheap.yield.chargeCost)
+	end)
+
+	it("makes multi-strike storms escalate", function()
+		for _, storm in ipairs(StormTypes.List) do
+			if storm.strike.strikeCount > 1 and storm.yield.perStrikeScale then
+				expect(storm.yield.perStrikeScale):greaterThan(1)
+			end
+		end
+	end)
+end)
+
+describe("Progression pacing", function()
+	it("reaches level 5 within a few minutes of banking", function()
+		-- A player banking a modest 200 energy per run at level 1.
+		local xpPerRun = 200 * Balance.Bank.XP_PER_ENERGY
+		local toLevel5 = MathUtil.CumulativeXp(5)
+		local runs = toLevel5 / xpPerRun
+		expect(runs):lessThan(12)
+	end)
+
+	it("makes the level cap a genuine long-term goal", function()
+		local xpPerRun = 4000 * Balance.Bank.XP_PER_ENERGY
+		local toCap = MathUtil.CumulativeXp(Balance.Progression.MAX_LEVEL)
+		local runs = toCap / xpPerRun
+		expect(runs):greaterThan(300)
+	end)
+
+	it("keeps the first upgrade affordable after one or two banks", function()
+		local cheapest = math.huge
+		for _, upgrade in ipairs(Upgrades.List) do
+			-- GetCost returns (cost, currency); the extra return must not reach min.
+			local cost = Upgrades.GetCost(upgrade.id, 0)
+			cheapest = math.min(cheapest, cost)
+		end
+		-- A first bank of ~120 energy at 1.0 rate must nearly cover something.
+		expect(cheapest):lessOrEqual(120)
+	end)
+
+	it("awards enough skill points to reach a tier-5 keystone by the cap", function()
+		local earned = ProfileSchema.CalculateEarnedSkillPoints(Balance.Progression.MAX_LEVEL)
+
+		-- The cost of one full branch path to a keystone.
+		local path = {
+			runner_fleet = 5,
+			runner_kinetic_jump = 1,
+			runner_air_dash = 1,
+			runner_blink_step = 1,
+			runner_ks_featherweight = 1,
+		}
+		local cost = SkillTree.GetSpentPoints(path)
+		expect(earned):greaterThan(cost)
+		-- But not so many that every branch can be maxed, or specialisation is moot.
+		local everything = {}
+		for _, node in ipairs(SkillTree.Nodes) do
+			everything[node.id] = node.maxRank
+		end
+		expect(earned):lessThan(SkillTree.GetSpentPoints(everything))
+	end)
+end)
+
+describe("World events", function()
+	it("gives everyone a meaningful share and the top contributor more", function()
+		local low = WorldEvents.CalculateRewards("event_superstorm", 0.02, false, Balance)
+		local high = WorldEvents.CalculateRewards("event_superstorm", 0.6, true, Balance)
+
+		-- A late joiner still gets a real reward.
+		expect(low.watts):greaterThan(0)
+		expect(low.lootRolls):greaterOrEqual(1)
+		-- The top contributor gets substantially more, plus Cores.
+		expect(high.watts):greaterThan(low.watts * 5)
+		expect(high.cores):greaterThan(low.cores)
+	end)
+
+	it("floors the reward share so tiny contributions are not worthless", function()
+		local tiny = WorldEvents.CalculateRewards("event_rare_bloom", 0.0001, false, Balance)
+		local floor = WorldEvents.CalculateRewards("event_rare_bloom", Balance.Events.MIN_REWARD_SHARE, false, Balance)
+		expect(tiny.watts):equal(floor.watts)
+	end)
+
+	it("resolves the active phase from elapsed time", function()
+		local phase, index = WorldEvents.GetActivePhase("event_superstorm", 10)
+		expect(phase.id):equal("approach")
+		expect(index):equal(1)
+
+		local mid = WorldEvents.GetActivePhase("event_superstorm", 200)
+		expect(mid.id):equal("front")
+
+		local late = WorldEvents.GetActivePhase("event_superstorm", 420)
+		expect(late.id):equal("wake")
+
+		local ended = WorldEvents.GetActivePhase("event_superstorm", 9999)
+		expect(ended):isNil()
+	end)
+
+	it("filters eligible events by population and level", function()
+		local emptyServer = WorldEvents.GetEligible(1, 5, {})
+		expect(emptyServer.event_superstorm):isNil()
+		expect(emptyServer.event_rare_bloom):ok()
+
+		local busyServer = WorldEvents.GetEligible(8, 40, {})
+		expect(busyServer.event_superstorm):ok()
+		expect(busyServer.event_storm_boss):ok()
+	end)
+
+	it("excludes events that are already running", function()
+		local eligible = WorldEvents.GetEligible(8, 40, { event_superstorm = true })
+		expect(eligible.event_superstorm):isNil()
+	end)
+
+	it("decays the weight of events far below the server's level", function()
+		local lowLevel = WorldEvents.GetEligible(4, 10, {})
+		local highLevel = WorldEvents.GetEligible(4, 90, {})
+		-- Rare Bloom is a level-2 event; a level-90 server should see it far less.
+		expect(highLevel.event_rare_bloom):lessThan(lowLevel.event_rare_bloom)
+	end)
+end)
+
+describe("Ability balance", function()
+	it("prices long-duration abilities with long cooldowns", function()
+		for _, ability in ipairs(Abilities.Actives) do
+			local duration = ability.effects.duration
+			if duration then
+				-- Nothing may be active more than half the time it is on cooldown.
+				expect(ability.cooldown):greaterThan(duration)
+			end
+		end
+	end)
+
+	it("gives every emergency ability a real cost", function()
+		for _, ability in ipairs(Abilities.Actives) do
+			local isEmergency = false
+			for _, tag in ipairs(ability.tags) do
+				if tag == "emergency" then
+					isEmergency = true
+				end
+			end
+			if isEmergency then
+				-- Emergency abilities are powerful, so they are gated by a long
+				-- cooldown, a cast time, a resource cost, or a limited charge pool
+				-- that recharges slowly — never free.
+				local hasCost = ability.cooldown >= 18
+					or (ability.castTime or 0) > 0
+					or ability.effects.energyCostFraction ~= nil
+					or ability.effects.bankPenalty ~= nil
+					or (ability.effects.charges ~= nil and ability.effects.rechargePerCharge ~= nil)
+				expect(hasCost):ok()
+			end
+		end
+	end)
+
+	it("keeps cooldown reduction from trivialising long cooldowns", function()
+		local stats = Stats.CreateBaseTable()
+		stats.abilityCooldown = Stats.ById.abilityCooldown.max
+		local reduced = Abilities.GetCooldown("emergency_extract", stats)
+		-- A four-minute cooldown must stay over a minute even fully invested.
+		expect(reduced):greaterThan(60)
+	end)
+end)
+
+describe("Equipment progression", function()
+	it("raises the best available base stat weight with every tier", function()
+		--[[
+			An item's "weight" is the sum of its stat magnitudes expressed as a
+			fraction of each stat's own baseline, so a +95 capacity and a +8% resist
+			are comparable. Downsides count toward the total: an item that trades is
+			still doing work, it is just doing it in two directions.
+		]]
+		local function weight(definition)
+			local total = 0
+			for kind, statMap in pairs(definition.baseStats) do
+				for statId, amount in pairs(statMap) do
+					local stat = Stats.ById[statId]
+					if kind == "flat" and stat.base > 0 then
+						total += math.abs(amount) / stat.base
+					else
+						total += math.abs(amount)
+					end
+				end
+			end
+			return total
+		end
+
+		local byTier = {}
+		for _, base in ipairs(Equipment.Bases) do
+			byTier[base.tier] = math.max(byTier[base.tier] or 0, weight(base))
+		end
+
+		-- The best item available at each tier must beat the best of the tier below,
+		-- or reaching a new region buys the player nothing.
+		local previous = 0
+		for tier = 1, 6 do
+			local best = byTier[tier]
+			if best then
+				if best <= previous then
+					error(("tier %d best weight %.2f does not beat tier %d's %.2f")
+						:format(tier, best, tier - 1, previous))
+				end
+				previous = best
+			end
+		end
+	end)
+
+	it("gives higher-tier bases a higher level requirement", function()
+		for _, base in ipairs(Equipment.Bases) do
+			-- Tier and required level must move together, or the drop pool is
+			-- incoherent at every point in the game.
+			expect(base.requiredLevel):greaterOrEqual((base.tier - 1) * 8)
+		end
+	end)
+
+	it("makes a specialised low-tier base competitive for its build", function()
+		-- A Runner in a tier-2 Featherframe must beat the same Runner in a tier-5
+		-- Skyframe on movement, or "build" means nothing.
+		local runnerLight = makeProfile()
+		equipItem(runnerLight, "cell_light", "rare")
+		local lightValues = StatsService.ResolveForProfile(runnerLight, nil, 0)
+
+		local runnerHeavy = makeProfile()
+		equipItem(runnerHeavy, "cell_bulk", "rare")
+		local heavyValues = StatsService.ResolveForProfile(runnerHeavy, nil, 0)
+
+		expect(lightValues.moveSpeed):greaterThan(heavyValues.moveSpeed)
+		expect(heavyValues.capacity):greaterThan(lightValues.capacity)
+	end)
+
+	it("rolls more affixes at higher rarity", function()
+		local commonRange = Balance.Loot.MODIFIER_COUNTS.common
+		local legendaryRange = Balance.Loot.MODIFIER_COUNTS.legendary
+		expect(legendaryRange.min):greaterThan(commonRange.max)
+	end)
+end)

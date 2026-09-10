@@ -300,13 +300,17 @@ end
 
 --[[
 	XP required to advance FROM `level` TO `level + 1`.
-	Superlinear but gentle early: level 1->2 is quick, level 40->41 is a session.
+
+	The exponent carries the late game and the coefficients stay small, so the first
+	handful of levels arrive within a few banks — which is what makes the opening
+	minutes feel like progress — while the curve still turns the level cap into a
+	genuine long-term goal.
 ]]
 function MathUtil.XpForLevel(level: number): number
 	if level < 1 then
 		return 0
 	end
-	return math.floor(85 * (level ^ 1.42) + 42 * level + 60)
+	return math.floor(26 * (level ^ 1.68) + 24 * level + 34)
 end
 
 --[[ Total cumulative XP required to reach `level` from level 1. ]]
