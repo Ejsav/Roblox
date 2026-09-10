@@ -161,6 +161,10 @@ local ACTIONS = {
 		label = "Settings",
 		keyboard = Enum.KeyCode.O,
 	},
+	social = {
+		label = "Runners",
+		keyboard = Enum.KeyCode.G,
+	},
 	closeMenu = {
 		label = "Close",
 		keyboard = Enum.KeyCode.Escape,
@@ -247,6 +251,7 @@ function InputController:_handleAction(actionId: string, state: Enum.UserInputSt
 		or actionId == "crafting"
 		or actionId == "prestige"
 		or actionId == "settings"
+		or actionId == "social"
 		or actionId == "upgrades"
 
 	if self._menuOpen and not isMenuAction then

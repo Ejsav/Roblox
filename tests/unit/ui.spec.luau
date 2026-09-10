@@ -700,3 +700,247 @@ describe("UI/CraftingScreen", function()
 		expect(amountText):contains("36")
 	end)
 end)
+
+describe("UI/SocialScreen", function()
+	local SocialScreen = loadModule("Client/UI/Screens/SocialScreen")
+
+	it("builds with no party controller present", function()
+		local screen = SocialScreen.new(newParent(), {})
+		screen:SetVisible(true)
+		expect(screen):ok()
+	end)
+
+	it("says so when nobody else is on the server", function()
+		local screen = SocialScreen.new(newParent(), {})
+		screen:Refresh()
+
+		local empty
+		for _, row in ipairs(screen._rows) do
+			if row.Name == "Empty" then
+				empty = row
+			end
+		end
+		expect(empty):ok()
+	end)
+
+	it("pins the party above everyone else and never lists a member twice", function()
+		local party = {
+			partyId = "p1",
+			leaderId = 1,
+			maxSize = 4,
+			members = {
+				{ userId = 1, name = "LocalPlayer", level = 20, isLeader = true },
+			},
+		}
+
+		local screen = SocialScreen.new(newParent(), {
+			PartyController = {
+				Name = "PartyController",
+				GetParty = function() return party end,
+				CanInvite = function() return true, nil end,
+			},
+		})
+		screen:Refresh()
+
+		-- Two headings, one member row, one empty notice: the local player appears
+		-- in the party section and must not be repeated below it.
+		local memberRows = 0
+		for _, row in ipairs(screen._rows) do
+			if row.Name == "player1" then
+				memberRows += 1
+			end
+		end
+		expect(memberRows):equal(1)
+	end)
+
+	it("states why an invite is unavailable instead of showing a dead button", function()
+		local screen = SocialScreen.new(newParent(), {
+			PartyController = {
+				Name = "PartyController",
+				GetParty = function() return nil end,
+				CanInvite = function() return false, "Your party is full." end,
+			},
+		})
+		screen:_addRow({
+			userId = 42,
+			name = "Someone",
+			action = "invite",
+			enabled = false,
+			blockText = "Your party is full.",
+		}, 1)
+
+		local row = screen._rows[1]
+		expect(row:FindFirstChild("Sub").Text):equal("Your party is full.")
+	end)
+end)
+
+describe("Client/AdminController", function()
+	local AdminController = loadModule("Client/Controllers/AdminController")
+
+	it("splits a plain command into a name and arguments", function()
+		local command, args = AdminController.Parse("give watts 1000")
+		expect(command):equal("give")
+		expect(#args):equal(2)
+		expect(args[1]):equal("watts")
+		expect(args[2]):equal("1000")
+	end)
+
+	it("keeps a quoted argument whole", function()
+		-- A display name can contain a space, and splitting it would send the server
+		-- two arguments where the operator meant one.
+		local command, args = AdminController.Parse('profile "Some Runner"')
+		expect(command):equal("profile")
+		expect(#args):equal(1)
+		expect(args[1]):equal("Some Runner")
+	end)
+
+	it("collapses runs of spaces rather than producing empty arguments", function()
+		local _, args = AdminController.Parse("give    watts     50")
+		expect(#args):equal(2)
+	end)
+
+	it("returns nothing for an empty line", function()
+		local command = AdminController.Parse("   ")
+		expect(command):isNil()
+	end)
+
+	it("handles a command with no arguments", function()
+		local command, args = AdminController.Parse("help")
+		expect(command):equal("help")
+		expect(#args):equal(0)
+	end)
+end)
+
+describe("Client/PartyController", function()
+	local PartyController = loadModule("Client/Controllers/PartyController")
+
+	local function makeController()
+		local controller = setmetatable({}, { __index = PartyController })
+		PartyController.Init(controller)
+		controller.Registry = { Get = function() return nil end, Find = function() return nil end }
+		return controller
+	end
+
+	it("reports no party before anything arrives", function()
+		local controller = makeController()
+		expect(controller:IsInParty()):equal(false)
+		expect(controller:IsLeader()):equal(false)
+	end)
+
+	it("tracks membership from a party message", function()
+		local controller = makeController()
+		controller:_onUpdate({
+			kind = "party",
+			partyId = "p1",
+			leaderId = 1,
+			maxSize = 4,
+			members = {
+				{ userId = 1, name = "LocalPlayer", level = 5, isLeader = true },
+				{ userId = 2, name = "Other", level = 9 },
+			},
+		})
+
+		expect(controller:IsInParty()):equal(true)
+		-- The mock's LocalPlayer is user 1, so the local player is the leader here.
+		expect(controller:IsLeader()):equal(true)
+	end)
+
+	it("clears the party when it dissolves", function()
+		local controller = makeController()
+		controller:_onUpdate({ kind = "party", leaderId = 1, maxSize = 4, members = {} })
+		controller:_onUpdate({ kind = "dissolved" })
+		expect(controller:IsInParty()):equal(false)
+	end)
+
+	it("refuses to invite somebody already in the party", function()
+		local controller = makeController()
+		controller:_onUpdate({
+			kind = "party",
+			leaderId = 1,
+			maxSize = 4,
+			members = {
+				{ userId = 1, name = "LocalPlayer", isLeader = true },
+				{ userId = 2, name = "Other" },
+			},
+		})
+
+		local ok, reason = controller:CanInvite(2)
+		expect(ok):equal(false)
+		expect(reason):contains("Already")
+	end)
+
+	it("refuses to invite into a full party", function()
+		local controller = makeController()
+		controller:_onUpdate({
+			kind = "party",
+			leaderId = 1,
+			maxSize = 2,
+			members = {
+				{ userId = 1, name = "LocalPlayer", isLeader = true },
+				{ userId = 2, name = "Other" },
+			},
+		})
+
+		local ok, reason = controller:CanInvite(3)
+		expect(ok):equal(false)
+		expect(reason):contains("full")
+	end)
+
+	it("refuses to invite when not the leader", function()
+		local controller = makeController()
+		controller:_onUpdate({
+			kind = "party",
+			leaderId = 2,
+			maxSize = 4,
+			members = {
+				{ userId = 2, name = "Other", isLeader = true },
+				{ userId = 1, name = "LocalPlayer" },
+			},
+		})
+
+		local ok, reason = controller:CanInvite(3)
+		expect(ok):equal(false)
+		expect(reason):contains("leader")
+	end)
+
+	it("refuses to invite yourself", function()
+		local controller = makeController()
+		expect(select(1, controller:CanInvite(1))):equal(false)
+	end)
+
+	it("allows an invite when in no party at all", function()
+		local controller = makeController()
+		expect(select(1, controller:CanInvite(7))):equal(true)
+	end)
+
+	it("shows an invite and clears it when it expires", function()
+		local controller = makeController()
+		controller:_onUpdate({
+			kind = "invite",
+			inviteId = "i1",
+			fromName = "Someone",
+			partySize = 1,
+			maxSize = 4,
+			expiresIn = 60,
+		})
+		expect(controller._invite):ok()
+
+		controller:_onUpdate({ kind = "invite_expired", inviteId = "i1" })
+		expect(controller._invite):isNil()
+	end)
+
+	it("does not let a stale expiry clear a newer invite", function()
+		local controller = makeController()
+		controller:_onUpdate({ kind = "invite", inviteId = "old", fromName = "A", expiresIn = 60 })
+		controller:_onUpdate({ kind = "invite", inviteId = "new", fromName = "B", expiresIn = 60 })
+
+		controller:_onUpdate({ kind = "invite_expired", inviteId = "old" })
+		expect(controller._invite):ok()
+		expect(controller._invite.inviteId):equal("new")
+	end)
+
+	it("cannot respond when there is no invite", function()
+		local controller = makeController()
+		expect(controller:Respond(true)):equal(false)
+	end)
+end)

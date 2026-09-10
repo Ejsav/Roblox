@@ -33,6 +33,7 @@ local CodexScreen = require(Client.UI.Screens.CodexScreen)
 local CraftingScreen = require(Client.UI.Screens.CraftingScreen)
 local PrestigeScreen = require(Client.UI.Screens.PrestigeScreen)
 local SettingsScreen = require(Client.UI.Screens.SettingsScreen)
+local SocialScreen = require(Client.UI.Screens.SocialScreen)
 
 local MenuController = {}
 MenuController.Name = "MenuController"
@@ -51,6 +52,7 @@ local MENUS = {
 	{ id = "codex", name = "CODEX", action = "codex" },
 	{ id = "crafting", name = "CRAFT", action = "crafting" },
 	{ id = "prestige", name = "PRESTIGE", action = "prestige" },
+	{ id = "social", name = "RUNNERS", action = "social" },
 	{ id = "settings", name = "SETTINGS", action = "settings" },
 }
 
@@ -117,6 +119,7 @@ function MenuController:Start()
 	self._screens.crafting = CraftingScreen.new(self._container, self.Registry:GetAll())
 	self._screens.prestige = PrestigeScreen.new(self._container, self.Registry:GetAll())
 	self._screens.settings = SettingsScreen.new(self._container, self.Registry:GetAll())
+	self._screens.social = SocialScreen.new(self._container, self.Registry:GetAll())
 
 	for _, screen in pairs(self._screens) do
 		screen:SetVisible(false)
@@ -262,6 +265,7 @@ function MenuController:_distributeProfile()
 	self._screens.crafting:SetProfile(self._profile)
 	self._screens.prestige:SetProfile(self._profile)
 	self._screens.settings:SetProfile(self._profile)
+	self._screens.social:SetProfile(self._profile)
 end
 
 -- ============================================================================
