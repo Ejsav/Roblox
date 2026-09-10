@@ -44,6 +44,57 @@ function DiscoveryService:Start()
 	Net.OnServerEvent("ReportDiscovery", function(player, discoveryId, position)
 		self:Report(player, discoveryId, position)
 	end)
+
+	-- A player's manifest is sent when they arrive and refreshed when they change
+	-- region, which is the only time the useful set of nearby secrets changes by
+	-- enough to matter.
+	local regions = self.Registry:Find("RegionService")
+	if regions and regions.RegionEntered then
+		regions.RegionEntered:Connect(function(player: Player)
+			self:SendManifest(player)
+		end)
+	end
+
+	if self._data.ProfileLoaded then
+		self._data.ProfileLoaded:Connect(function(player: Player)
+			self:SendManifest(player)
+		end)
+	end
+end
+
+--[[
+	Sends the positions of the secrets this player has not yet found.
+
+	This is the one place the game deliberately hands the client information it
+	could exploit: with the manifest, a modified client can see where every secret
+	in the region is. That is accepted, because the alternative is the server
+	distance-checking every player against every discovery every frame, and because
+	the payoff for cheating is small — a discovery is a one-off reward, the server
+	still revalidates position before granting it, and a client that teleports to
+	one is caught by the movement check long before the secret matters.
+
+	Names are withheld. The manifest says a thing is there, never what it is.
+]]
+function DiscoveryService:SendManifest(player: Player)
+	local profile = self._data:GetProfile(player)
+	if not profile then
+		return
+	end
+
+	local regionId = profile.lastRegion
+
+	local entries = {}
+	for id, entry in pairs(self._registry) do
+		if not profile.discoveries[id] and entry.regionId == regionId then
+			table.insert(entries, {
+				id = id,
+				position = entry.position,
+				radius = entry.radius,
+			})
+		end
+	end
+
+	Net.FireClient(player, "DiscoveryManifest", entries)
 end
 
 --[[ Registers a discovery. Called by the world builder as it places them. ]]

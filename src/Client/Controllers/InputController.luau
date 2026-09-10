@@ -111,6 +111,13 @@ local ACTIONS = {
 		touchButton = true,
 		touchPriority = 11,
 	},
+	purge = {
+		label = "Purge",
+		keyboard = Enum.KeyCode.X,
+		gamepad = Enum.KeyCode.ButtonL3,
+		touchButton = true,
+		touchPriority = 12,
+	},
 	map = {
 		label = "Map",
 		keyboard = Enum.KeyCode.M,

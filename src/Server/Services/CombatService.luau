@@ -307,6 +307,13 @@ function CombatService:_getNearbyLivingPlayers(player: Player, radius: number): 
 	return nearby
 end
 
+--[[ Where a player currently is, or the origin when they have no character. ]]
+function CombatService:_positionOf(player: Player): Vector3
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return root and (root :: BasePart).Position or Vector3.new()
+end
+
 function CombatService:_setDowned(player: Player, state: CombatState, source: string)
 	state.downed = true
 	state.downedUntil = os.clock() + Balance.Survival.DOWNED_DURATION
@@ -321,6 +328,17 @@ function CombatService:_setDowned(player: Player, state: CombatState, source: st
 		body = "Reach them before the timer runs out.",
 		transient = true,
 	})
+
+	-- Position as well as identity: a message saying somebody is down without
+	-- saying where is a message that cannot be acted on.
+	Net.FireAllClients("CombatState", {
+		kind = "downed",
+		userId = player.UserId,
+		name = player.DisplayName,
+		position = self:_positionOf(player),
+		expiresAt = state.downedUntil,
+	})
+
 	self:_sync(player)
 end
 
@@ -368,6 +386,8 @@ function CombatService:CompleteRevive(target: Player, healFraction: number?)
 	self.Revived:Fire(target)
 	self:_applyToHumanoid(target, state)
 	self:_sync(target)
+
+	Net.FireAllClients("CombatState", { kind = "revived", userId = target.UserId })
 
 	Net.FireClient(target, "Notification", {
 		kind = "good",
@@ -421,6 +441,10 @@ function CombatService:Kill(player: Player, source: string)
 	end
 
 	self.Died:Fire(player, source, summary, position)
+
+	-- Clears the marker anyone was running towards. A revive prompt that outlives
+	-- the person it points at is worse than no prompt.
+	Net.FireAllClients("CombatState", { kind = "died", userId = player.UserId })
 
 	Net.FireClient(player, "Notification", {
 		kind = "bad",

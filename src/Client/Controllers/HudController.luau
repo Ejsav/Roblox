@@ -178,6 +178,61 @@ function HudController:_bindNetwork()
 		end
 	end))
 
+	-- World events feed the tracker from three messages. Start and phase carry the
+	-- text; progress carries the numbers, several times a second.
+	maid:Add(Net.OnClientEvent("WorldEventStarted", function(payload)
+		self._hud:UpdateWorldEvent({
+			name = payload.name,
+			phaseName = payload.phaseName,
+			objective = payload.announcement,
+		})
+	end))
+
+	maid:Add(Net.OnClientEvent("WorldEventPhase", function(payload)
+		self._hud:UpdateWorldEvent({
+			phaseName = payload.phaseName,
+			phaseIndex = payload.phaseIndex,
+			phaseCount = payload.phaseCount,
+			objective = payload.description or payload.objective,
+			remaining = payload.duration,
+		})
+	end))
+
+	maid:Add(Net.OnClientEvent("WorldEventProgress", function(payload)
+		self._hud:UpdateWorldEvent({
+			remaining = payload.remaining,
+			bossHealthFraction = payload.bossHealthFraction,
+			nodes = payload.nodes,
+			contribution = payload.contribution,
+		})
+	end))
+
+	maid:Add(Net.OnClientEvent("WorldEventEnded", function(payload)
+		self._hud:ClearWorldEvent()
+		self._hud:ShowBanner({
+			title = payload.failed and "EVENT LOST" or "EVENT COMPLETE",
+			subtitle = payload.name,
+			detail = payload.rank
+				and ("Placed %d of %d"):format(payload.rank, payload.participants or payload.rank)
+				or nil,
+			color = payload.failed and Theme.Color.danger or Theme.Color.success,
+			duration = 5,
+		})
+	end))
+
+	-- A rare storm anywhere on the server is worth interrupting for; it is the
+	-- game's only "drop what you are doing" signal that is not an emergency.
+	maid:Add(Net.OnClientEvent("RareStormAlert", function(payload)
+		local rarity = Theme.GetRarity(payload.rarity)
+		self._hud:ShowBanner({
+			title = string.upper(payload.name),
+			subtitle = ("%s storm sighted"):format(rarity.label),
+			detail = payload.regionId and self:_regionName(payload.regionId) or nil,
+			color = rarity.color,
+			duration = 5,
+		})
+	end))
+
 	maid:Add(Net.OnClientEvent("DiscoveryMade", function(payload)
 		self._hud:ShowBanner({
 			title = "Discovery",
@@ -239,6 +294,20 @@ end
 
 function HudController:Destroy()
 	self._maid:DoCleaning()
+end
+
+--[[ A region's display name, for messages that only carry its id. ]]
+function HudController:_regionName(regionId: string): string?
+	local region = Regions.ById[regionId]
+	return region and region.name or nil
+end
+
+--[[ Passed through to the HUD so the ability controller does not need to know
+     how the HUD is laid out. ]]
+function HudController:FlashAbilityRefusal(abilityId: string?, reason: string?)
+	if self._hud then
+		self._hud:FlashAbilityRefusal(abilityId, reason)
+	end
 end
 
 return HudController

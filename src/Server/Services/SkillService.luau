@@ -103,6 +103,8 @@ function SkillService:RankUp(player: Player, nodeId: string): (boolean, string?)
 		skills = { [nodeId] = newRank },
 		skillPoints = profile.skillPoints,
 		specialisation = self:GetSpecialisation(player),
+		behaviours = self._stats:GetBehaviours(player),
+		stats = self._stats:GetStats(player),
 	})
 
 	if self._analytics then

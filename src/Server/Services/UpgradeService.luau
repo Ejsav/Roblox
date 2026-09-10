@@ -124,6 +124,11 @@ function UpgradeService:Purchase(player: Player, upgradeId: string, levels: numb
 	local nextMilestone, distance = Upgrades.GetNextMilestone(upgradeId, newLevel)
 	Net.FireClient(player, "ProfileDelta", {
 		upgrades = { [upgradeId] = newLevel },
+		-- Behaviours ride along, because a milestone that unlocks a capability has
+		-- just changed what the client is allowed to offer, and the client would
+		-- otherwise not learn about it until the next join.
+		behaviours = self._stats:GetBehaviours(player),
+		stats = self._stats:GetStats(player),
 		nextMilestone = nextMilestone and {
 			upgradeId = upgradeId,
 			name = nextMilestone.name,

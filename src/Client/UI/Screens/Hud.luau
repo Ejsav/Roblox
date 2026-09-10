@@ -83,6 +83,7 @@ function Hud:_build()
 	self:_buildAbilityBar(root)
 	self:_buildTopLeft(root)
 	self:_buildObjective(root)
+	self:_buildWorldEvent(root)
 	self:_buildBanner(root)
 	self:_buildCompass(root)
 	self:_buildFeedback(root)
@@ -481,6 +482,106 @@ function Hud:_buildObjective(root: Frame)
 	Components.List(self._objectiveList, { gap = Theme.Space.xxs })
 end
 
+--[[
+	The world-event tracker.
+
+	Sits under the objective panel because it is the same kind of information —
+	"what am I supposed to be doing right now" — and a player should not have to
+	look in two corners for it. Hidden entirely when no event is running, rather
+	than shown empty: permanent chrome for an occasional thing is how a HUD becomes
+	noise.
+]]
+function Hud:_buildWorldEvent(root: Frame)
+	local panel = Components.Panel({
+		parent = root,
+		name = "WorldEvent",
+		size = UDim2.fromOffset(280, 0),
+		position = UDim2.new(1, -Theme.Layout.screenPadding, 0, Theme.Layout.screenPadding + 120),
+		anchorPoint = Vector2.new(1, 0),
+		elevation = 1,
+		transparency = 0.2,
+		padding = Theme.Space.md,
+		zIndex = Theme.ZIndex.hud,
+	})
+	panel.AutomaticSize = Enum.AutomaticSize.Y
+	panel.Visible = false
+	self._eventPanel = panel
+
+	Components.List(panel, { gap = Theme.Space.xxs })
+
+	self._eventName = Components.Text({
+		parent = panel,
+		name = "Name",
+		text = "",
+		size = UDim2.new(1, 0, 0, 16),
+		textSize = Theme.Text.caption,
+		font = Theme.Font.medium,
+		color = Theme.Color.warning,
+		layoutOrder = 1,
+		zIndex = panel.ZIndex + 1,
+	})
+
+	self._eventPhase = Components.Text({
+		parent = panel,
+		name = "Phase",
+		text = "",
+		size = UDim2.new(1, 0, 0, 18),
+		textSize = Theme.Text.body,
+		font = Theme.Font.medium,
+		layoutOrder = 2,
+		zIndex = panel.ZIndex + 1,
+	})
+
+	self._eventObjective = Components.Text({
+		parent = panel,
+		name = "Objective",
+		text = "",
+		size = UDim2.new(1, 0, 0, 28),
+		textSize = Theme.Text.caption,
+		color = Theme.Color.textSecondary,
+		wrapped = true,
+		alignY = Enum.TextYAlignment.Top,
+		layoutOrder = 3,
+		zIndex = panel.ZIndex + 1,
+	})
+
+	self._eventTimer = Components.Text({
+		parent = panel,
+		name = "Timer",
+		text = "",
+		size = UDim2.new(1, 0, 0, 18),
+		textSize = Theme.Text.body,
+		font = Theme.Font.heading,
+		color = Theme.Color.textPrimary,
+		alignX = Enum.TextXAlignment.Right,
+		layoutOrder = 4,
+		zIndex = panel.ZIndex + 1,
+	})
+
+	-- Boss health only appears for events that have a boss, which is why it is a
+	-- separate bar rather than a repurposed progress bar with a changing label.
+	self._eventBossBar = select(2, Components.Bar({
+		parent = panel,
+		name = "BossHealth",
+		size = UDim2.new(1, 0, 0, 5),
+		color = Theme.Color.danger,
+		layoutOrder = 5,
+		zIndex = panel.ZIndex + 1,
+	}))
+	self._eventBossBar.Instance.Visible = false
+
+	self._eventContribution = Components.Text({
+		parent = panel,
+		name = "Contribution",
+		text = "",
+		size = UDim2.new(1, 0, 0, 14),
+		textSize = Theme.Text.caption,
+		color = Theme.Color.textTertiary,
+		layoutOrder = 6,
+		zIndex = panel.ZIndex + 1,
+	})
+end
+
 --[[ The transient banner: region arrivals, event alerts, major unlocks. ]]
 function Hud:_buildBanner(root: Frame)
 	local banner = Components.Container({
@@ -614,12 +715,14 @@ function Hud:_applyLayout()
 	if compact then
 		self._carryCluster.Size = UDim2.fromOffset(240, 108)
 		self._objectivePanel.Size = UDim2.fromOffset(200, 0)
+		self._eventPanel.Size = UDim2.fromOffset(200, 0)
 		self._compass.Size = UDim2.fromOffset(260, 26)
 		self._abilityBar.Position = UDim2.new(1, -Theme.Layout.screenPadding, 1, -110)
 		self._readouts.carried.ValueLabel.TextSize = Theme.Text.title
 	else
 		self._carryCluster.Size = UDim2.fromOffset(320, 120)
 		self._objectivePanel.Size = UDim2.fromOffset(280, 0)
+		self._eventPanel.Size = UDim2.fromOffset(280, 0)
 		self._compass.Size = UDim2.fromOffset(420, 26)
 		self._abilityBar.Position = UDim2.new(1, -Theme.Layout.screenPadding, 1, -Theme.Layout.screenPadding)
 		self._readouts.carried.ValueLabel.TextSize = Theme.Text.display
@@ -729,6 +832,38 @@ function Hud:UpdateAbilities(slots: { any })
 	end
 end
 
+--[[
+	Flashes a slot to say a press was refused. Which slot is worked out from the
+	ability id when there is one; a press with nothing slotted flashes the bar
+	itself, so "that key does nothing yet" still produces a visible answer rather
+	than silence.
+]]
+function Hud:FlashAbilityRefusal(abilityId: string?, reason: string?)
+	local target = self._abilityBar
+
+	for _, slot in ipairs(self._abilitySlots) do
+		if abilityId and slot.abilityId == abilityId then
+			target = slot.frame
+			break
+		end
+	end
+
+	if not target then
+		return
+	end
+
+	Components.Shake(target, 4, 2)
+
+	if reason and reason ~= "" then
+		self:ShowBanner({
+			title = "NOT READY",
+			subtitle = reason,
+			color = Theme.Color.textTertiary,
+			duration = 1.2,
+		})
+	end
+end
+
 function Hud:UpdateObjective(quest: any?)
 	if not quest then
 		self._objectivePanel.Visible = false
@@ -769,6 +904,62 @@ end
 -- ============================================================================
 -- Banner
 -- ============================================================================
+
+--[[
+	Shows or updates the world-event tracker. Three messages feed it — start, phase
+	change, and progress — and each carries only what it knows, so fields are
+	written when present and left alone when absent rather than being cleared by a
+	message that simply did not mention them.
+]]
+function Hud:UpdateWorldEvent(payload: any?)
+	if not payload then
+		self._eventPanel.Visible = false
+		self._eventBossBar.Instance.Visible = false
+		return
+	end
+
+	if not self._eventPanel.Visible then
+		self._eventPanel.Visible = true
+		Components.FadeIn(self._eventPanel, { duration = "fast", slide = Vector2.new(20, 0) })
+	end
+
+	if payload.name then
+		self._eventName.Text = string.upper(payload.name)
+	end
+
+	if payload.phaseName then
+		self._eventPhase.Text = payload.phaseCount
+			and ("%s  (%d/%d)"):format(payload.phaseName, payload.phaseIndex or 1, payload.phaseCount)
+			or payload.phaseName
+	end
+
+	if payload.objective then
+		self._eventObjective.Text = payload.objective
+	end
+
+	if payload.remaining then
+		local remaining = math.max(0, payload.remaining)
+		self._eventTimer.Text = ("%d:%02d"):format(math.floor(remaining / 60), math.floor(remaining % 60))
+		-- The last ten seconds turn red, because that is when a player's decision
+		-- about whether to commit or bail actually changes.
+		self._eventTimer.TextColor3 = remaining <= 10 and Theme.Color.danger or Theme.Color.textPrimary
+	end
+
+	if payload.bossHealthFraction then
+		self._eventBossBar.Instance.Visible = true
+		self._eventBossBar:SetValue(payload.bossHealthFraction, true)
+	end
+
+	if payload.contribution then
+		self._eventContribution.Text = ("Your contribution: %s"):format(Theme.FormatNumber(payload.contribution))
+	elseif payload.nodes then
+		self._eventContribution.Text = ("%d nodes active"):format(payload.nodes)
+	end
+end
+
+function Hud:ClearWorldEvent()
+	self:UpdateWorldEvent(nil)
+end
 
 function Hud:ShowBanner(config: {
 	title: string,

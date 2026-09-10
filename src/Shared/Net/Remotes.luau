@@ -366,6 +366,11 @@ Remotes.Definitions = {
 		description = "Party membership and member state.",
 	},
 
+	CombatState = {
+		direction = "S2C",
+		description = "A runner went down, was revived, or died — so others can reach them.",
+	},
+
 	RequestRevive = {
 		direction = "C2S",
 		rateLimit = { budget = 6, refill = 1 },
@@ -374,6 +379,11 @@ Remotes.Definitions = {
 	},
 
 	-- ================================================================== DISCOVERY
+	DiscoveryManifest = {
+		direction = "S2C",
+		description = "Undiscovered secret positions near the player, for client-side detection.",
+	},
+
 	ReportDiscovery = {
 		direction = "C2S",
 		rateLimit = { budget = 6, refill = 1 },

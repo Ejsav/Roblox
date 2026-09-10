@@ -47,6 +47,7 @@ local VERBS = {
 	event_node = "DELIVER",
 	gate = "EXAMINE",
 	workbench = "CRAFT",
+	revive = "REVIVE",
 }
 
 function InteractionController:Init()
@@ -55,6 +56,16 @@ function InteractionController:Init()
 	self._target = nil
 	self._carry = nil
 	self._banking = false
+	self._canRemoteBank = false
+
+	-- Undiscovered secrets in this region, and the ones already reported this
+	-- session so a player standing in a trigger does not send it every frame while
+	-- the server's answer is in flight.
+	self._discoveries = {}
+	self._reported = {}
+
+	-- Downed runners near enough to revive, refreshed from combat messages.
+	self._downed = {}
 
 	self.TargetChanged = Signal.new("Interaction.TargetChanged")
 
@@ -85,6 +96,18 @@ function InteractionController:Start()
 		end
 	end))
 
+	-- Whether remote banking is available is a stat behaviour, so it arrives with
+	-- the profile and with any delta that changes what the player can do.
+	self._maid:Add(Net.OnClientEvent("ProfileSync", function(payload)
+		self:_readBehaviours(payload.behaviours)
+	end))
+
+	self._maid:Add(Net.OnClientEvent("ProfileDelta", function(payload)
+		if payload.behaviours then
+			self:_readBehaviours(payload.behaviours)
+		end
+	end))
+
 	self._maid:Add(Net.OnClientEvent("BankResult", function()
 		self._banking = false
 	end))
@@ -109,11 +132,154 @@ function InteractionController:Start()
 		end
 	end))
 
-	self._maid:Add(self._input.ActionBegan:Connect(function(actionId)
-		if actionId == "interact" or actionId == "bank" then
-			self:Interact()
+	self._maid:Add(Net.OnClientEvent("DiscoveryManifest", function(entries)
+		self._discoveries = entries or {}
+	end))
+
+	self._maid:Add(Net.OnClientEvent("DiscoveryMade", function(payload)
+		-- Drop it from the manifest the moment it is granted, so the trigger stops
+		-- being tested at all rather than being tested and rejected.
+		self:_forgetDiscovery(payload.id)
+	end))
+
+	self._maid:Add(Net.OnClientEvent("CombatState", function(payload)
+		if payload.kind == "downed" then
+			self._downed[payload.userId] = payload.position
+		elseif payload.kind == "revived" or payload.kind == "died" then
+			self._downed[payload.userId] = nil
 		end
 	end))
+
+	self._maid:Add(self._input.ActionBegan:Connect(function(actionId)
+		if actionId == "interact" then
+			self:Interact()
+		elseif actionId == "bank" then
+			-- The bank key means "bank" wherever the player is standing. With a
+			-- station in range that is the station; without one it is the remote
+			-- deposit, if they have unlocked it. Making the same key do the
+			-- available thing beats making the player remember two.
+			if self._target and self._target.kind == "bank" then
+				self:Interact()
+			elseif not self:RemoteBank() then
+				self:Interact()
+			end
+		elseif actionId == "purge" then
+			self:Purge()
+		end
+	end))
+end
+
+-- ============================================================================
+-- Self actions
+-- ============================================================================
+
+--[[
+	The panic button. Vents instability at the cost of a slice of the carry.
+
+	Refused locally when there is nothing to purge, because a player mashing it out
+	of habit should not spend their rate-limit budget on requests the server will
+	decline anyway — and the budget is small precisely because this is the request
+	a panicking player sends most.
+]]
+function InteractionController:Purge(): boolean
+	local carry = self._carry
+	if not carry or (carry.carried or 0) <= 0 then
+		return false
+	end
+	if (carry.instability or 0) <= 0.01 then
+		return false
+	end
+
+	Net.FireServer("RequestPurge")
+
+	if self._audio then
+		self._audio:PlayUi("ability_purge")
+	end
+	return true
+end
+
+function InteractionController:_readBehaviours(behaviours: any)
+	if type(behaviours) ~= "table" then
+		return
+	end
+	self._canRemoteBank = behaviours.remote_bank == true
+end
+
+--[[
+	Banks from anywhere, at the penalty the unlock carries.
+
+	Returns false when it is not available, so the caller can fall through to the
+	ordinary interaction rather than the key silently doing nothing.
+]]
+function InteractionController:RemoteBank(): boolean
+	local carry = self._carry
+	if not carry or (carry.carried or 0) <= 0 then
+		return false
+	end
+	if not self._canRemoteBank then
+		return false
+	end
+
+	Net.FireServer("RequestRemoteBank")
+	self._banking = true
+
+	if self._audio then
+		self._audio:PlayUi("bank_start")
+	end
+	return true
+end
+
+-- ============================================================================
+-- Discoveries
+-- ============================================================================
+
+function InteractionController:_forgetDiscovery(discoveryId: string?)
+	if not discoveryId then
+		return
+	end
+	for index = #self._discoveries, 1, -1 do
+		if self._discoveries[index].id == discoveryId then
+			table.remove(self._discoveries, index)
+		end
+	end
+end
+
+--[[
+	Reports any discovery trigger the player is standing in.
+
+	Client-side detection because it must be instant and because the server has no
+	business testing every player against every secret every frame. Nothing is
+	trusted: the report carries an id and a position, and the server re-checks the
+	distance from its own copy of where the player is.
+]]
+function InteractionController:_checkDiscoveries(position: Vector3)
+	for _, entry in ipairs(self._discoveries) do
+		if self._reported[entry.id] then
+			continue
+		end
+		if (entry.position - position).Magnitude <= (entry.radius or 12) then
+			self._reported[entry.id] = true
+			Net.FireServer("ReportDiscovery", entry.id, position)
+		end
+	end
+end
+
+-- ============================================================================
+-- Revival
+-- ============================================================================
+
+--[[ The nearest downed runner within reviving distance, if any. ]]
+function InteractionController:_nearestDowned(position: Vector3): (number?, number)
+	local bestId, bestDistance = nil, math.huge
+
+	for userId, downedPosition in pairs(self._downed) do
+		local distance = (downedPosition - position).Magnitude
+		if distance < bestDistance and distance <= Balance.Survival.REVIVE_RADIUS then
+			bestId, bestDistance = userId, distance
+		end
+	end
+
+	return bestId, bestDistance
 end
 
 -- ============================================================================
@@ -233,6 +399,12 @@ function InteractionController:_resolveTarget()
 	end
 
 	local origin = (root :: BasePart).Position
+
+	-- Discoveries are checked on the same pass rather than in their own loop: the
+	-- work is identical, and doing it twice would double the per-frame cost of the
+	-- cheapest correct implementation.
+	self:_checkDiscoveries(origin)
+
 	local best, bestDistance = nil, math.huge
 
 	for _, entry in ipairs(self._manifest) do
@@ -240,6 +412,21 @@ function InteractionController:_resolveTarget()
 		if distance <= (entry.range or 16) and distance < bestDistance then
 			best, bestDistance = entry, distance
 		end
+	end
+
+	-- A downed runner outranks every object. Nothing in the manifest is more
+	-- urgent than a person on a timer, and a prompt that offered a bank while
+	-- somebody bled out next to it would be a design failure, not a preference.
+	local downedId, downedDistance = self:_nearestDowned(origin)
+	if downedId and downedDistance < math.huge then
+		return {
+			id = "revive:" .. tostring(downedId),
+			kind = "revive",
+			userId = downedId,
+			position = self._downed[downedId],
+			range = Balance.Survival.REVIVE_RADIUS,
+			name = "Downed runner",
+		}
 	end
 
 	return best
@@ -350,7 +537,23 @@ function InteractionController:Interact(): boolean
 		return false
 	end
 
-	Net.FireServer("RequestInteract", target.id)
+	if target.kind == "revive" then
+		Net.FireServer("RequestRevive", target.userId)
+		if self._audio then
+			self._audio:PlayUi("ui_click")
+		end
+		return true
+	end
+
+	if target.kind == "bank" then
+		-- Banking goes through its own remote rather than the generic interact path,
+		-- because it is the only interaction that takes an argument the player
+		-- chooses: a partial deposit when they are holding the sprint modifier, so
+		-- keeping a chain alive does not require letting go of everything.
+		Net.FireServer("RequestBank", target.id, self._input:IsHeld("sprint"))
+	else
+		Net.FireServer("RequestInteract", target.id)
+	end
 
 	if target.kind == "bank" then
 		-- Banking has a wind-up on the server; the prompt shows it filling so the
