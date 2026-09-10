@@ -9,7 +9,9 @@ class of bug where something is fully built and entirely unreachable:
   1. Every client-sendable remote has exactly one server handler.
   2. Every server-to-client remote is fired by something.
   3. Every service module on disk is registered in the bootstrap.
-  4. Every screen module on disk is constructed by the menu controller.
+  4. Every service dependency names a service that exists.
+  5. Every client controller on disk is loaded by the client bootstrap.
+  6. Every screen module on disk is constructed by the menu controller.
 
 Exits non-zero and names the offender.
 """
@@ -94,6 +96,50 @@ def check_services(problems):
             problems.append(f"service {name} exists but is not registered in the bootstrap")
 
 
+def check_dependencies(problems):
+    """Every declared service dependency must name a registered service.
+
+    The registry resolves dependencies topologically at boot, so a name that does
+    not exist is not a warning — it is a service that never starts, and the
+    failure surfaces as whatever breaks first downstream.
+    """
+    services = {}
+    for path in walk("src/Server/Services"):
+        name = os.path.basename(path)[: -len(".luau")]
+        services[name] = read(os.path.relpath(path, ROOT))
+
+    # The world builder registers itself as a service too.
+    for path in walk("src/Server/World"):
+        text = read(os.path.relpath(path, ROOT))
+        match = re.search(r"^(\w+)\.Name = \"(\w+)\"", text, re.M)
+        if match:
+            services[match.group(2)] = text
+
+    for name, text in services.items():
+        match = re.search(r"\.Dependencies = \{(.*?)\}", text, re.S)
+        if not match:
+            continue
+        for dependency in re.findall(r'"(\w+)"', match.group(1)):
+            if dependency not in services:
+                problems.append(
+                    f"service {name} depends on {dependency}, which does not exist"
+                )
+
+
+def check_controllers(problems):
+    """Every client controller on disk must be in the bootstrap's module list."""
+    bootstrap = read("src/Client/init.client.luau")
+    registered = set(re.findall(r'name = "(\w+)"', bootstrap))
+
+    for directory in ("src/Client/Controllers", "src/Client/Effects"):
+        for path in walk(directory):
+            name = os.path.basename(path)[: -len(".luau")]
+            if name not in registered:
+                problems.append(
+                    f"controller {name} exists but the client bootstrap never loads it"
+                )
+
+
 def check_screens(problems):
     menu = read("src/Client/Controllers/MenuController.luau")
     constructed = set(re.findall(r"(\w+Screen)\.new\(", menu))
@@ -111,6 +157,8 @@ def main():
     problems = []
     check_remotes(problems)
     check_services(problems)
+    check_dependencies(problems)
+    check_controllers(problems)
     check_screens(problems)
 
     if problems:
