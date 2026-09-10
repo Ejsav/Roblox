@@ -60,6 +60,20 @@ function VfxController:Start()
 	self._settings = self.Registry:Find("SettingsController")
 end
 
+--[[ Settings this controller owns. "auto" is left alone: the runtime tuner owns
+     quality in that mode, and overriding it here would fight it every frame. ]]
+function VfxController:ApplySettings(settings: any)
+	if type(settings) ~= "table" then
+		return
+	end
+	if settings.quality and settings.quality ~= "auto" then
+		self:SetQuality(settings.quality)
+	end
+	if settings.reducedMotion ~= nil then
+		self._reducedMotion = settings.reducedMotion == true
+	end
+end
+
 function VfxController:SetQuality(quality: string)
 	self._quality = quality
 	self._budget = Balance.Performance.QUALITY_TIERS[quality] or Balance.Performance.QUALITY_TIERS.medium

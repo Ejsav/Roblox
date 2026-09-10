@@ -149,6 +149,18 @@ local ACTIONS = {
 		-- No gamepad binding: the four d-pad directions are spent, and the codex is
 		-- the one menu nobody needs to reach in a hurry. It is on the tab bar.
 	},
+	crafting = {
+		label = "Craft",
+		keyboard = Enum.KeyCode.C,
+	},
+	prestige = {
+		label = "Prestige",
+		keyboard = Enum.KeyCode.P,
+	},
+	settings = {
+		label = "Settings",
+		keyboard = Enum.KeyCode.O,
+	},
 	closeMenu = {
 		label = "Close",
 		keyboard = Enum.KeyCode.Escape,
@@ -232,6 +244,9 @@ function InputController:_handleAction(actionId: string, state: Enum.UserInputSt
 		or actionId == "skills"
 		or actionId == "quests"
 		or actionId == "codex"
+		or actionId == "crafting"
+		or actionId == "prestige"
+		or actionId == "settings"
 		or actionId == "upgrades"
 
 	if self._menuOpen and not isMenuAction then

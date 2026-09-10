@@ -22,6 +22,9 @@ local SkillsScreen = loadModule("Client/UI/Screens/SkillsScreen")
 local InventoryScreen = loadModule("Client/UI/Screens/InventoryScreen")
 local QuestScreen = loadModule("Client/UI/Screens/QuestScreen")
 local CodexScreen = loadModule("Client/UI/Screens/CodexScreen")
+local CraftingScreen = loadModule("Client/UI/Screens/CraftingScreen")
+local PrestigeScreen = loadModule("Client/UI/Screens/PrestigeScreen")
+local SettingsScreen = loadModule("Client/UI/Screens/SettingsScreen")
 local Hud = loadModule("Client/UI/Screens/Hud")
 
 local function newParent()
@@ -37,6 +40,9 @@ describe("UI/Screens construction", function()
 		expect(InventoryScreen.new(parent, {})):ok()
 		expect(QuestScreen.new(parent, {})):ok()
 		expect(CodexScreen.new(parent, {})):ok()
+		expect(CraftingScreen.new(parent, {})):ok()
+		expect(PrestigeScreen.new(parent, {})):ok()
+		expect(SettingsScreen.new(parent, {})):ok()
 	end)
 
 	it("builds the HUD", function()
@@ -53,6 +59,9 @@ describe("UI/Screens construction", function()
 			InventoryScreen.new(parent, {}),
 			QuestScreen.new(parent, {}),
 			CodexScreen.new(parent, {}),
+			CraftingScreen.new(parent, {}),
+			PrestigeScreen.new(parent, {}),
+			SettingsScreen.new(parent, {}),
 		}) do
 			screen:SetVisible(true)
 			screen:SetVisible(false)
@@ -415,5 +424,279 @@ describe("UI/CodexScreen", function()
 				expect(row:FindFirstChild("Name").Text):equal("???")
 			end
 		end
+	end)
+end)
+
+describe("UI/SettingsScreen", function()
+	it("renders every stored setting", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local screen = SettingsScreen.new(newParent(), {})
+		screen:SetProfile(profile)
+
+		expect(screen:Get("quality")):equal("auto")
+		expect(screen:Get("musicVolume")):equal(profile.settings.musicVolume)
+	end)
+
+	it("applies a change locally before it is persisted", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local applied = nil
+
+		local screen = SettingsScreen.new(newParent(), {
+			AudioController = {
+				Name = "AudioController",
+				ApplySettings = function(_, settings)
+					applied = settings.musicVolume
+				end,
+			},
+		})
+		screen:SetProfile(profile)
+		screen:Set("musicVolume", 0.25)
+
+		expect(screen:Get("musicVolume")):equal(0.25)
+		expect(applied):equal(0.25)
+	end)
+
+	it("applies stored settings on arrival, not only on change", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.settings.hudScale = 1.4
+
+		local seen = nil
+		local screen = SettingsScreen.new(newParent(), {
+			HudController = {
+				Name = "HudController",
+				ApplySettings = function(_, settings)
+					seen = settings.hudScale
+				end,
+			},
+		})
+		screen:SetProfile(profile)
+
+		expect(seen):equal(1.4)
+	end)
+
+	it("survives a controller whose applier throws", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local reached = false
+
+		local screen = SettingsScreen.new(newParent(), {
+			Bad = {
+				Name = "Bad",
+				ApplySettings = function()
+					error("intentional")
+				end,
+			},
+			Good = {
+				Name = "Good",
+				ApplySettings = function()
+					reached = true
+				end,
+			},
+		})
+		screen:SetProfile(profile)
+
+		-- One broken controller must not stop the rest from receiving settings.
+		expect(reached):equal(true)
+	end)
+
+	it("ignores controllers with no applier", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local screen = SettingsScreen.new(newParent(), {
+			Plain = { Name = "Plain" },
+			NotATable = 5,
+		})
+		screen:SetProfile(profile)
+		screen:Set("subtitles", true)
+		expect(screen:Get("subtitles")):equal(true)
+	end)
+
+	it("clamps a slider at both ends", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local screen = SettingsScreen.new(newParent(), {})
+		screen:SetProfile(profile)
+
+		local down = screen._root:FindFirstChild("musicVolume", true)
+		expect(down):ok()
+
+		screen:Set("musicVolume", 0)
+		expect(screen:Get("musicVolume")):equal(0)
+		screen:Set("musicVolume", 1)
+		expect(screen:Get("musicVolume")):equal(1)
+	end)
+
+	it("queues one write rather than one per step", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local screen = SettingsScreen.new(newParent(), {})
+		screen:SetProfile(profile)
+
+		screen:Set("sfxVolume", 0.5)
+		screen:Set("sfxVolume", 0.4)
+		screen:Set("sfxVolume", 0.3)
+
+		-- All three collapse into one pending entry holding the final value.
+		local pendingCount = 0
+		for _ in pairs(screen._pending or {}) do
+			pendingCount += 1
+		end
+		expect(pendingCount):equal(1)
+		expect(screen._pending.sfxVolume):equal(0.3)
+	end)
+end)
+
+describe("UI/PrestigeScreen", function()
+	local function makeView(eligible)
+		return {
+			sigils = 12,
+			status = {
+				currentRank = 2,
+				maxRank = 12,
+				eligible = eligible,
+				requirement = eligible and nil or "Reach level 120 (currently 40)",
+				nextRank = { rank = 3, name = "Third Circuit", sigils = 3, grants = { title = "circuit" } },
+			},
+			skills = {
+				{ id = "p_a", name = "A", tier = 1, cost = 3, description = "Does a thing.", owned = true, canPurchase = false },
+				{ id = "p_b", name = "B", tier = 1, cost = 5, description = "Does another.", owned = false, canPurchase = true },
+				{ id = "p_c", name = "C", tier = 2, cost = 9, owned = false, canPurchase = false, blockText = "Requires A." },
+			},
+			ranks = {},
+		}
+	end
+
+	it("renders the tree grouped by tier", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetProfile(ProfileSchema.CreateDefault(1))
+		screen:SetView(makeView(true))
+
+		-- Three skills plus two tier headings.
+		expect(#screen._rows):equal(5)
+	end)
+
+	it("refuses to arm the commit when the player is not eligible", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(false))
+
+		screen:_onCommit()
+		expect(screen._confirming):equal(false)
+	end)
+
+	it("arms rather than committing on the first press", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(true))
+
+		screen:_onCommit()
+		expect(screen._confirming):equal(true)
+	end)
+
+	it("spells out the consequence on the armed button", function()
+		-- "Confirm?" tells a player nothing. The armed label has to name the rank
+		-- they are about to take and the reset they are about to accept, because
+		-- this is the only irreversible action in the game.
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(true))
+		screen:_onCommit()
+
+		local text = screen._commitButton.Instance.Text
+		expect(text):contains("RESET")
+		expect(text):contains("3")
+	end)
+
+	it("disarms when the screen is closed", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(true))
+		screen:_onCommit()
+
+		screen:SetVisible(false)
+		expect(screen._confirming):equal(false)
+	end)
+
+	it("disarms when a fresh view arrives", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(true))
+		screen:_onCommit()
+
+		screen:SetView(makeView(true))
+		expect(screen._confirming):equal(false)
+	end)
+
+	it("states the requirement when blocked", function()
+		local screen = PrestigeScreen.new(newParent(), {})
+		screen:SetView(makeView(false))
+		expect(screen._requirementLabel.Text):contains("level 120")
+	end)
+end)
+
+describe("UI/CraftingScreen", function()
+	local function makeView()
+		return {
+			categories = {},
+			resources = { scrap_coil = 4 },
+			consumables = {},
+			recipes = {
+				{
+					id = "craft_a",
+					category = "equipment",
+					name = "A",
+					description = "Buildable.",
+					ingredients = { scrap_coil = 2 },
+					cost = {},
+					output = { kind = "resource", resourceId = "scrap_coil", quantity = 1 },
+					canCraft = true,
+				},
+				{
+					id = "craft_b",
+					category = "equipment",
+					name = "B",
+					description = "Not buildable.",
+					ingredients = { scrap_coil = 40 },
+					cost = {},
+					output = { kind = "resource", resourceId = "scrap_coil", quantity = 1 },
+					canCraft = false,
+					blockText = "Not enough coil.",
+					requiredLevel = 30,
+				},
+			},
+		}
+	end
+
+	it("puts craftable recipes above ones that are not", function()
+		local screen = CraftingScreen.new(newParent(), {})
+		screen:SetProfile(ProfileSchema.CreateDefault(1))
+		screen:SetView(makeView())
+
+		local ordered = screen:_recipesForCategory("equipment")
+		expect(ordered[1].id):equal("craft_a")
+		expect(screen._selected):equal("craft_a")
+	end)
+
+	it("says why a recipe is blocked on the row itself", function()
+		local screen = CraftingScreen.new(newParent(), {})
+		screen:SetProfile(ProfileSchema.CreateDefault(1))
+		screen:SetView(makeView())
+
+		local blockedRow
+		for _, row in ipairs(screen._rows) do
+			if row.Name == "craft_b" then
+				blockedRow = row
+			end
+		end
+		expect(blockedRow):ok()
+		expect(blockedRow:FindFirstChild("Sub").Text):equal("Not enough coil.")
+	end)
+
+	it("shows the shortfall, not just the requirement", function()
+		local screen = CraftingScreen.new(newParent(), {})
+		screen:SetProfile(ProfileSchema.CreateDefault(1))
+		screen:SetView(makeView())
+		screen:Select("craft_b")
+
+		local amountText
+		for _, row in ipairs(screen._detailRows) do
+			local label = row:FindFirstChild("Amount")
+			if label then
+				amountText = label.Text
+			end
+		end
+		expect(amountText):contains("need")
+		expect(amountText):contains("36")
 	end)
 end)

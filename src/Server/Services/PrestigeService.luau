@@ -45,6 +45,14 @@ function PrestigeService:Start()
 			self:Prestige(player)
 		end
 	end)
+
+	Net.OnServerEvent("RequestPrestigeView", function(player)
+		return self:BuildView(player)
+	end)
+
+	Net.OnServerEvent("RequestPrestigeSkill", function(player, skillId)
+		self:PurchaseSkill(player, skillId)
+	end)
 end
 
 --[[ Eligibility, plus a description of what is missing. ]]

@@ -153,6 +153,22 @@ Remotes.Definitions = {
 		args = {},
 	},
 
+	RequestPrestigeView = {
+		direction = "C2SF",
+		rateLimit = { budget = 4, refill = 0.5 },
+		description = "Fetch prestige status, ranks and the prestige skill tree.",
+		args = {},
+	},
+
+	RequestPrestigeSkill = {
+		direction = "C2S",
+		rateLimit = { budget = 6, refill = 1 },
+		description = "Purchase a prestige skill with sigils.",
+		args = {
+			V.String(1, 48),            -- skill id
+		},
+	},
+
 	RequestPrestige = {
 		direction = "C2S",
 		rateLimit = { budget = 1, refill = 0.02 },
@@ -208,6 +224,13 @@ Remotes.Definitions = {
 			V.String(1, 40),
 			V.Boolean(),
 		},
+	},
+
+	RequestCrafting = {
+		direction = "C2SF",
+		rateLimit = { budget = 4, refill = 0.5 },
+		description = "Fetch the crafting panel: recipes, what blocks each, and stock.",
+		args = {},
 	},
 
 	RequestCraft = {

@@ -1196,6 +1196,22 @@ function Hud:_updateCompass()
 	end
 end
 
+--[[
+	Scales the whole HUD. Applied as one UIScale on the root rather than by resizing
+	each element, so a player who needs larger text gets larger everything and the
+	layout keeps its proportions.
+]]
+function Hud:SetScale(scale: number)
+	local clamped = math.clamp(scale or 1, 0.6, 1.6)
+
+	local uiScale = self._root:FindFirstChildOfClass("UIScale")
+	if not uiScale then
+		uiScale = Instance.new("UIScale")
+		uiScale.Parent = self._root
+	end
+	uiScale.Scale = clamped
+end
+
 function Hud:SetVisible(visible: boolean)
 	self._root.Visible = visible
 end

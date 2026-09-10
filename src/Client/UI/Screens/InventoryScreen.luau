@@ -312,7 +312,17 @@ function InventoryScreen:_buildDetail(root: Frame)
 	})
 	self._equipButton = equipButton
 	self._maid:Add(equipButton.Pressed:Connect(function()
-		if self._selected then
+		if not self._selected then
+			return
+		end
+
+		-- The same button unequips what is already worn. A dead "EQUIPPED" button
+		-- beside a separate "UNEQUIP" one asks the player to hunt for an action
+		-- that belongs exactly where their cursor already is.
+		local item = self:_getSelectedItem()
+		if item and self._view and self._view.equipped[item.slot] == item.uid then
+			Net.FireServer("RequestUnequip", item.slot)
+		else
 			Net.FireServer("RequestEquip", self._selected)
 		end
 	end))
@@ -650,8 +660,8 @@ function InventoryScreen:_updateDetail()
 	self._detailFlavour.Text = item.flavour or ""
 
 	local equipped = self._view.equipped[item.slot] == item.uid
-	self._equipButton:SetText(equipped and "EQUIPPED" or "EQUIP")
-	self._equipButton:SetEnabled(not equipped)
+	self._equipButton:SetText(equipped and "UNEQUIP" or "EQUIP")
+	self._equipButton:SetEnabled(true)
 	self._dismantleButton:SetEnabled(not equipped and not item.favourite)
 	self._favouriteButton:SetText(item.favourite and "UNFAVOURITE" or "FAVOURITE")
 	self._favouriteButton:SetEnabled(true)

@@ -296,6 +296,36 @@ function HudController:Destroy()
 	self._maid:DoCleaning()
 end
 
+--[[
+	Applies the settings this controller owns. Reduced motion is held here rather
+	than read from the profile at each use site, so a single flag governs every
+	flourish instead of a dozen scattered checks that can drift apart.
+]]
+function HudController:ApplySettings(settings: any)
+	if type(settings) ~= "table" then
+		return
+	end
+
+	if settings.hudScale and self._hud then
+		self._hud:SetScale(settings.hudScale)
+	end
+
+	if settings.reducedMotion ~= nil then
+		self._reducedMotion = settings.reducedMotion == true
+	end
+
+	if settings.screenShake ~= nil then
+		self._shakeScale = math.clamp(settings.screenShake, 0, 1)
+	end
+end
+
+function HudController:GetShakeScale(): number
+	if self._reducedMotion then
+		return 0
+	end
+	return self._shakeScale or 1
+end
+
 --[[ A region's display name, for messages that only carry its id. ]]
 function HudController:_regionName(regionId: string): string?
 	local region = Regions.ById[regionId]

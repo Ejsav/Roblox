@@ -46,6 +46,10 @@ function CraftingService:Start()
 	Net.OnServerEvent("RequestCraft", function(player, recipeId, quantity)
 		self:Craft(player, recipeId, quantity)
 	end)
+
+	Net.OnServerEvent("RequestCrafting", function(player)
+		return self:BuildView(player)
+	end)
 end
 
 -- ============================================================================

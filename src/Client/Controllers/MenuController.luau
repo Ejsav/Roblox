@@ -30,6 +30,9 @@ local SkillsScreen = require(Client.UI.Screens.SkillsScreen)
 local InventoryScreen = require(Client.UI.Screens.InventoryScreen)
 local QuestScreen = require(Client.UI.Screens.QuestScreen)
 local CodexScreen = require(Client.UI.Screens.CodexScreen)
+local CraftingScreen = require(Client.UI.Screens.CraftingScreen)
+local PrestigeScreen = require(Client.UI.Screens.PrestigeScreen)
+local SettingsScreen = require(Client.UI.Screens.SettingsScreen)
 
 local MenuController = {}
 MenuController.Name = "MenuController"
@@ -46,6 +49,9 @@ local MENUS = {
 	{ id = "inventory", name = "EQUIPMENT", action = "inventory" },
 	{ id = "quests", name = "QUESTS", action = "quests" },
 	{ id = "codex", name = "CODEX", action = "codex" },
+	{ id = "crafting", name = "CRAFT", action = "crafting" },
+	{ id = "prestige", name = "PRESTIGE", action = "prestige" },
+	{ id = "settings", name = "SETTINGS", action = "settings" },
 }
 
 function MenuController:Init()
@@ -108,6 +114,9 @@ function MenuController:Start()
 	self._screens.inventory = InventoryScreen.new(self._container, self.Registry:GetAll())
 	self._screens.quests = QuestScreen.new(self._container, self.Registry:GetAll())
 	self._screens.codex = CodexScreen.new(self._container, self.Registry:GetAll())
+	self._screens.crafting = CraftingScreen.new(self._container, self.Registry:GetAll())
+	self._screens.prestige = PrestigeScreen.new(self._container, self.Registry:GetAll())
+	self._screens.settings = SettingsScreen.new(self._container, self.Registry:GetAll())
 
 	for _, screen in pairs(self._screens) do
 		screen:SetVisible(false)
@@ -250,6 +259,9 @@ function MenuController:_distributeProfile()
 	self._screens.skills:SetProfile(self._profile)
 	self._screens.quests:SetProfile(self._profile)
 	self._screens.codex:SetProfile(self._profile)
+	self._screens.crafting:SetProfile(self._profile)
+	self._screens.prestige:SetProfile(self._profile)
+	self._screens.settings:SetProfile(self._profile)
 end
 
 -- ============================================================================
