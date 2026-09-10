@@ -1,0 +1,78 @@
+{
+  "name": "BorrowTheStorm",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$ignoreUnknownInstances": true,
+      "BTS": {
+        "$path": "src/Shared"
+      }
+    },
+
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$ignoreUnknownInstances": true,
+      "BTSServer": {
+        "$path": "src/Server"
+      }
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$ignoreUnknownInstances": true,
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "$ignoreUnknownInstances": true,
+        "BTSClient": {
+          "$path": "src/Client"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$className": "Workspace",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "StreamingEnabled": true,
+        "StreamingMinRadius": 128,
+        "StreamingTargetRadius": 1024,
+        "FallenPartsDestroyHeight": -800
+      }
+    },
+
+    "Lighting": {
+      "$className": "Lighting",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "Technology": "Future",
+        "Ambient": [0.06, 0.07, 0.10],
+        "OutdoorAmbient": [0.12, 0.14, 0.19],
+        "Brightness": 1.6,
+        "EnvironmentDiffuseScale": 0.45,
+        "EnvironmentSpecularScale": 0.55,
+        "GlobalShadows": true,
+        "ShadowSoftness": 0.35,
+        "ExposureCompensation": 0.15
+      }
+    },
+
+    "SoundService": {
+      "$className": "SoundService",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    },
+
+    "Players": {
+      "$className": "Players",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "CharacterAutoLoads": true,
+        "RespawnTime": 3.5
+      }
+    }
+  }
+}

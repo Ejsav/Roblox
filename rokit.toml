@@ -1,0 +1,7 @@
+# Rokit toolchain manifest for BORROW THE STORM.
+# Install Rokit once (https://github.com/rojo-rbx/rokit), then run `rokit install`
+# in this folder and every tool below is pinned to the exact version the project expects.
+[tools]
+rojo = "rojo-rbx/rojo@7.5.1"
+stylua = "JohnnyMorganz/StyLua@2.0.2"
+selene = "Kampfkarren/selene@0.28.0"
