@@ -587,3 +587,258 @@ describe("Config/Quests", function()
 		end
 	end)
 end)
+
+local Achievements = loadModule("Shared/Config/Achievements")
+local ProfileSchema = loadModule("Shared/Data/ProfileSchema")
+
+describe("Config/Achievements", function()
+	it("puts every achievement in a declared category", function()
+		local categories = {}
+		for _, category in ipairs(Achievements.Categories) do
+			categories[category.id] = true
+		end
+		for _, achievement in ipairs(Achievements.List) do
+			if not categories[achievement.category] then
+				error(achievement.id .. " sits in unknown category " .. tostring(achievement.category))
+			end
+		end
+	end)
+
+	it("uses unique ids and unique titles", function()
+		local seenIds, seenTitles = {}, {}
+		for _, achievement in ipairs(Achievements.List) do
+			if seenIds[achievement.id] then
+				error("duplicate achievement id " .. achievement.id)
+			end
+			seenIds[achievement.id] = true
+
+			local titleId = achievement.rewards and achievement.rewards.title
+			if titleId then
+				if seenTitles[titleId] then
+					error(("title %s awarded by both %s and %s"):format(titleId, seenTitles[titleId], achievement.id))
+				end
+				seenTitles[titleId] = achievement.id
+			end
+		end
+	end)
+
+	it("points every content reference at something that exists", function()
+		for _, achievement in ipairs(Achievements.List) do
+			local source = achievement.source
+			if source.kind == "storm_capture" then
+				if not StormTypes.ById[source.stormId] then
+					error(achievement.id .. " watches unknown storm " .. tostring(source.stormId))
+				end
+			elseif source.kind == "quest" then
+				if not Quests.ById[source.questId] then
+					error(achievement.id .. " watches unknown quest " .. tostring(source.questId))
+				end
+			end
+		end
+	end)
+
+	it("gives every achievement a positive target and a reward", function()
+		for _, achievement in ipairs(Achievements.List) do
+			expect(achievement.target or 1):greaterThan(0)
+
+			local rewards = achievement.rewards or {}
+			local hasReward = (rewards.watts or 0) > 0
+				or (rewards.cores or 0) > 0
+				or (rewards.sigils or 0) > 0
+				or rewards.title ~= nil
+			if not hasReward then
+				error(achievement.id .. " completes but pays nothing")
+			end
+		end
+	end)
+
+	it("keeps the meta achievement at half the real total", function()
+		local half = math.floor(#Achievements.List / 2)
+		for _, achievement in ipairs(Achievements.List) do
+			if achievement.source.kind == "collection" and achievement.source.key == "achievements" then
+				expect(achievement.target):equal(half)
+			end
+		end
+	end)
+
+	it("scales rewards with difficulty inside a shared source", function()
+		-- Two achievements reading the same counter must pay more for the harder one,
+		-- or the tiers read as a downgrade.
+		local byKey = {}
+		for _, achievement in ipairs(Achievements.List) do
+			if achievement.source.kind == "record" then
+				byKey[achievement.source.key] = byKey[achievement.source.key] or {}
+				table.insert(byKey[achievement.source.key], achievement)
+			end
+		end
+
+		local function worth(achievement)
+			local rewards = achievement.rewards or {}
+			return (rewards.watts or 0) + (rewards.cores or 0) * 1000 + (rewards.sigils or 0) * 50000
+		end
+
+		for key, list in pairs(byKey) do
+			table.sort(list, function(a, b)
+				return (a.target or 1) < (b.target or 1)
+			end)
+			for index = 2, #list do
+				if worth(list[index]) <= worth(list[index - 1]) then
+					error(("%s pays no more than %s despite a higher %s target")
+						:format(list[index].id, list[index - 1].id, key))
+				end
+			end
+		end
+	end)
+
+	it("reads only records the server actually maintains", function()
+		-- The failure this catches is silent and permanent: an achievement that reads
+		-- a record nothing ever writes sits at zero forever, and no amount of playing
+		-- reveals the bug. Keep this list in step with the record writers in
+		-- CaptureService, CombatService, RegionService, WorldEventService and
+		-- ProgressionService:UpdateRecord.
+		local MAINTAINED_RECORDS = {
+			-- ProgressionService:UpdateRecord / IncrementRecord
+			largestBank = true,
+			highestMultiplier = true,
+			longestChain = true,
+			totalBanked = true,
+			-- Written directly by the service that owns the event
+			totalCaptures = true,
+			mostPerfectCaptures = true,
+			rareStormsFound = true,
+			deepestRegionReached = true,
+			totalDeaths = true,
+			eventsParticipated = true,
+			eventsTopContributor = true,
+			bestEventShare = true,
+		}
+
+		for _, achievement in ipairs(Achievements.List) do
+			if achievement.source.kind == "record" then
+				if not MAINTAINED_RECORDS[achievement.source.key] then
+					error(("%s reads record %s, which nothing on the server writes")
+						:format(achievement.id, tostring(achievement.source.key)))
+				end
+			end
+		end
+	end)
+
+	it("awards nothing to a brand new profile", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		expect(#Achievements.FindNewlyEarned(profile)):equal(0)
+	end)
+
+	it("finds an achievement once its record passes the target", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalCaptures = 1
+
+		local earned = Achievements.FindNewlyEarned(profile)
+		local ids = {}
+		for _, achievement in ipairs(earned) do
+			ids[achievement.id] = true
+		end
+		expect(ids["ach_first_capture"]):ok()
+	end)
+
+	it("stops reporting an achievement once it is recorded", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalCaptures = 1
+		profile.achievements.ach_first_capture = 1
+
+		for _, achievement in ipairs(Achievements.FindNewlyEarned(profile)) do
+			if achievement.id == "ach_first_capture" then
+				error("already-earned achievement reported again")
+			end
+		end
+	end)
+
+	it("withholds progress on an unearned hidden achievement's source", function()
+		-- Hidden achievements must not be reachable by counting: their progress is
+		-- either zero or complete, never a percentage that hints at what they are.
+		local profile = ProfileSchema.CreateDefault(1)
+		for _, achievement in ipairs(Achievements.List) do
+			if achievement.hidden then
+				local value, target = Achievements.GetProgress(achievement, profile)
+				expect(value):equal(0)
+				expect(target):equal(1)
+			end
+		end
+	end)
+
+	it("counts completion against the full list", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local earned, total = Achievements.GetCompletion(profile)
+		expect(earned):equal(0)
+		expect(total):equal(#Achievements.List)
+
+		profile.achievements.ach_first_capture = 1
+		earned = Achievements.GetCompletion(profile)
+		expect(earned):equal(1)
+	end)
+
+	it("cascades: earning enough achievements completes the meta achievement", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local half = math.floor(#Achievements.List / 2)
+
+		local granted = 0
+		for _, achievement in ipairs(Achievements.List) do
+			if achievement.source.kind ~= "collection" and granted < half then
+				profile.achievements[achievement.id] = 1
+				granted += 1
+			end
+		end
+
+		local ids = {}
+		for _, achievement in ipairs(Achievements.FindNewlyEarned(profile)) do
+			ids[achievement.id] = true
+		end
+		expect(ids["ach_achievements_half"]):ok()
+	end)
+end)
+
+describe("ProfileSchema/achievements", function()
+	it("drops achievements that no longer exist", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.achievements.ach_first_capture = 1700000000
+		profile.achievements.ach_removed_long_ago = 1700000000
+
+		ProfileSchema.Validate(profile)
+
+		expect(profile.achievements.ach_first_capture):equal(1700000000)
+		expect(profile.achievements.ach_removed_long_ago):isNil()
+	end)
+
+	it("repairs a malformed timestamp without revoking the achievement", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.achievements.ach_first_capture = "yesterday"
+
+		ProfileSchema.Validate(profile)
+
+		expect(profile.achievements.ach_first_capture):equal(1)
+	end)
+
+	it("clears an equipped title the player does not own", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.equippedTitle = "metronome"
+
+		ProfileSchema.Validate(profile)
+		expect(profile.equippedTitle):isNil()
+
+		profile.titlesOwned.metronome = true
+		profile.equippedTitle = "metronome"
+		ProfileSchema.Validate(profile)
+		expect(profile.equippedTitle):equal("metronome")
+	end)
+
+	it("keeps generated title ids it cannot check against a registry", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.titlesOwned.mastery_capture_20 = true
+		profile.titlesOwned[""] = true
+		profile.titlesOwned.broken = "yes"
+
+		ProfileSchema.Validate(profile)
+
+		expect(profile.titlesOwned.mastery_capture_20):equal(true)
+		expect(profile.titlesOwned.broken):isNil()
+	end)
+end)

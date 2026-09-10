@@ -792,3 +792,216 @@ describe("Prestige", function()
 		expect(total):lessThan(everything * 1.6)
 	end)
 end)
+
+-- ============================================================================
+-- Achievements
+-- ============================================================================
+
+local AchievementService = loadModule("Server/Services/AchievementService")
+local AchievementConfig = loadModule("Shared/Config/Achievements")
+
+--[[
+	AchievementService with its four collaborators stubbed. Init only builds tables
+	and signals, so it can be called directly; everything the awarding path touches
+	afterwards goes through _data, _economy and _progression, which is exactly why
+	those are fields rather than module-level requires.
+]]
+local function makeAchievementService(profile)
+	local service = setmetatable({}, { __index = AchievementService })
+	service.Registry = {
+		Get = function() return nil end,
+		Find = function() return nil end,
+	}
+	AchievementService.Init(service)
+
+	local awarded = {}
+	local unlocks = {}
+
+	service._data = {
+		GetProfile = function() return profile end,
+		MarkDirty = function() end,
+	}
+	service._economy = {
+		Award = function(_, _, currency, amount)
+			awarded[currency] = (awarded[currency] or 0) + amount
+		end,
+	}
+	service._progression = {
+		GrantUnlock = function(_, _, kind, id)
+			if kind == "title" then
+				profile.titlesOwned[id] = true
+				table.insert(unlocks, id)
+			end
+			return true
+		end,
+	}
+
+	return service, awarded, unlocks
+end
+
+local fakePlayer = { DisplayName = "Tester", UserId = 1, Parent = true }
+
+describe("AchievementService", function()
+	it("grants nothing for a fresh profile", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeAchievementService(profile)
+		expect(service:Evaluate(fakePlayer)):equal(0)
+	end)
+
+	it("awards an achievement once its condition is met", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalCaptures = 1
+
+		local service, awarded = makeAchievementService(profile)
+		expect(service:Evaluate(fakePlayer)):equal(1)
+
+		expect(profile.achievements.ach_first_capture):typeOf("number")
+		expect(awarded.watts):equal(200)
+	end)
+
+	it("does not award the same achievement twice", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalCaptures = 1
+
+		local service, awarded = makeAchievementService(profile)
+		service:Evaluate(fakePlayer)
+		expect(service:Evaluate(fakePlayer)):equal(0)
+		expect(awarded.watts):equal(200)
+	end)
+
+	it("grants the title an achievement carries and wears the first one", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalCaptures = 1000
+
+		local service, _, unlocks = makeAchievementService(profile)
+		service:Evaluate(fakePlayer)
+
+		expect(#unlocks):greaterThan(0)
+		expect(profile.titlesOwned.practised):equal(true)
+		-- A player who has never chosen a title wears the first one they earn.
+		expect(profile.equippedTitle):equal("practised")
+	end)
+
+	it("leaves an already-chosen title alone", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.titlesOwned.metronome = true
+		profile.equippedTitle = "metronome"
+		profile.records.totalCaptures = 1000
+
+		local service = makeAchievementService(profile)
+		service:Evaluate(fakePlayer)
+
+		expect(profile.equippedTitle):equal("metronome")
+	end)
+
+	it("cascades into the meta achievement in a single evaluation", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local half = math.floor(#AchievementConfig.List / 2)
+
+		-- Pre-award one short of half, all from non-collection sources so the meta
+		-- achievement is the only thing the final grant can trigger.
+		local seeded = 0
+		for _, achievement in ipairs(AchievementConfig.List) do
+			-- ach_first_capture is deliberately left unseeded: it is the trigger.
+			if achievement.source.kind ~= "collection"
+				and achievement.id ~= "ach_first_capture"
+				and seeded < half - 1
+			then
+				profile.achievements[achievement.id] = 1
+				seeded += 1
+			end
+		end
+
+		-- One more real achievement takes the count to half, which completes the meta
+		-- achievement in the same sweep rather than on some later tick.
+		profile.records.totalCaptures = 1
+
+		local service = makeAchievementService(profile)
+		local granted = service:Evaluate(fakePlayer)
+
+		expect(granted):greaterThan(1)
+		expect(profile.achievements.ach_achievements_half):typeOf("number")
+	end)
+
+	it("reads a generated mastery title without a registry entry", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeAchievementService(profile)
+
+		expect(service:GetTitleName("practised")):equal("Practised")
+		expect(service:GetTitleName("mastery_capture_20")):equal("Capture 20")
+		expect(service:GetTitleName("some_event_title")):equal("Some event title")
+	end)
+
+	it("refuses to equip a title the player does not own", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeAchievementService(profile)
+
+		expect(service:EquipTitle(fakePlayer, "metronome")):falsy()
+		expect(profile.equippedTitle):isNil()
+
+		profile.titlesOwned.metronome = true
+		expect(service:EquipTitle(fakePlayer, "metronome")):ok()
+		expect(profile.equippedTitle):equal("metronome")
+
+		expect(service:EquipTitle(fakePlayer, "")):ok()
+		expect(profile.equippedTitle):isNil()
+	end)
+
+	it("masks hidden achievements in the panel until they are earned", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeAchievementService(profile)
+		local view = service:BuildView(fakePlayer)
+
+		local hiddenCategory
+		for _, category in ipairs(view.categories) do
+			if category.id == "hidden" then
+				hiddenCategory = category
+			end
+		end
+
+		expect(hiddenCategory):ok()
+		expect(#hiddenCategory.rows):greaterThan(0)
+
+		for _, row in ipairs(hiddenCategory.rows) do
+			expect(row.masked):equal(true)
+			expect(row.name):equal("???")
+			-- The real id must not leak either: it names the storm or quest involved.
+			expect(row.id):contains("hidden:")
+			expect(row.rewards):isNil()
+		end
+	end)
+
+	it("unmasks a hidden achievement once it is earned", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.achievements.ach_hidden_underyard = 1700000000
+
+		local service = makeAchievementService(profile)
+		local view = service:BuildView(fakePlayer)
+
+		local found = false
+		for _, category in ipairs(view.categories) do
+			for _, row in ipairs(category.rows) do
+				if row.id == "ach_hidden_underyard" then
+					found = true
+					expect(row.masked):equal(false)
+					expect(row.name):equal("Twelve Marks")
+					expect(row.earned):equal(true)
+				end
+			end
+		end
+		expect(found):equal(true)
+	end)
+
+	it("counts every achievement in the panel exactly once", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeAchievementService(profile)
+		local view = service:BuildView(fakePlayer)
+
+		local rows = 0
+		for _, category in ipairs(view.categories) do
+			rows += #category.rows
+		end
+		expect(rows):equal(#AchievementConfig.List)
+		expect(view.completion.total):equal(#AchievementConfig.List)
+	end)
+end)

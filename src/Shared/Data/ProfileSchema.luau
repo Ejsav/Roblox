@@ -26,6 +26,7 @@ local SkillTree = require(script.Parent.Parent.Config.SkillTree)
 local Upgrades = require(script.Parent.Parent.Config.Upgrades)
 local Equipment = require(script.Parent.Parent.Config.Equipment)
 local Traversal = require(script.Parent.Parent.Config.Traversal)
+local Achievements = require(script.Parent.Parent.Config.Achievements)
 
 local ProfileSchema = {}
 
@@ -85,6 +86,8 @@ function ProfileSchema.CreateDefault()
 		equipped = {},
 		-- resourceId -> quantity
 		resources = {},
+		-- consumableId -> quantity
+		consumables = {},
 		nextItemId = 1,
 
 		-- ---------------------------------------------------------------- quests
@@ -513,6 +516,52 @@ function ProfileSchema.Validate(profile: any): { string }
 			profile.equipped[slotId] = nil
 			repair(("cleared %s: item %s not in inventory"):format(slotId, tostring(uid)))
 		end
+	end
+
+	-- Consumables follow the same rules as resources.
+	if type(profile.consumables) ~= "table" then
+		profile.consumables = {}
+	end
+	for consumableId, quantity in pairs(profile.consumables) do
+		local clamped = math.floor(clampNumber(quantity, 0, 9999, 0))
+		if clamped <= 0 then
+			profile.consumables[consumableId] = nil
+		elseif clamped ~= quantity then
+			profile.consumables[consumableId] = clamped
+		end
+	end
+
+	-- Achievements: a table of id -> unix time. An unknown id is content that was
+	-- removed, and it has to go, or it inflates the completion count forever.
+	if type(profile.achievements) ~= "table" then
+		profile.achievements = {}
+		repair("achievements table was missing")
+	end
+	for achievementId, earnedAt in pairs(profile.achievements) do
+		if not Achievements.ById[achievementId] then
+			profile.achievements[achievementId] = nil
+			repair("dropped unknown achievement " .. tostring(achievementId))
+		elseif type(earnedAt) ~= "number" or earnedAt <= 0 then
+			-- The achievement is real, so it is kept; only the timestamp is repaired.
+			profile.achievements[achievementId] = 1
+		end
+	end
+
+	-- Titles. Unlike achievements, unknown title ids are kept: titles come from
+	-- masteries, prestige ranks and events as generated ids, and this module has no
+	-- registry of those to check against. Only the shape is enforced.
+	if type(profile.titlesOwned) ~= "table" then
+		profile.titlesOwned = {}
+		repair("titles table was missing")
+	end
+	for titleId, owned in pairs(profile.titlesOwned) do
+		if type(titleId) ~= "string" or owned ~= true then
+			profile.titlesOwned[titleId] = nil
+		end
+	end
+	if profile.equippedTitle ~= nil and not profile.titlesOwned[profile.equippedTitle] then
+		repair("cleared equipped title " .. tostring(profile.equippedTitle) .. ": not owned")
+		profile.equippedTitle = nil
 	end
 
 	-- Resources must be non-negative integers.

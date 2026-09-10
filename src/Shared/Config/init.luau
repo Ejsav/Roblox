@@ -27,6 +27,8 @@ Config.Quests = require(script.Quests)
 Config.LootTables = require(script.LootTables)
 Config.WorldEvents = require(script.WorldEvents)
 Config.Prestige = require(script.Prestige)
+Config.Recipes = require(script.Recipes)
+Config.Achievements = require(script.Achievements)
 Config.Theme = require(script.Theme)
 
 --[[
@@ -113,6 +115,65 @@ function Config.Verify(): (boolean, { string })
 		if rank.grants.item then
 			check(Config.Equipment.UniqueById[rank.grants.item] ~= nil,
 				("prestige rank %d grants unknown item %s"):format(rank.rank, rank.grants.item))
+		end
+	end
+
+	-- A recipe that names a base or resource which does not exist is a dead entry
+	-- in the crafting panel, so it is checked here rather than discovered by a player.
+	for _, recipe in ipairs(Config.Recipes.List) do
+		for resourceId in pairs(recipe.ingredients) do
+			check(Config.Resources.ById[resourceId] ~= nil,
+				("recipe %s needs unknown resource %s"):format(recipe.id, resourceId))
+		end
+		if recipe.output.kind == "equipment" then
+			check(Config.Equipment.BaseById[recipe.output.baseId] ~= nil,
+				("recipe %s produces unknown base %s"):format(recipe.id, tostring(recipe.output.baseId)))
+		elseif recipe.output.kind == "resource" then
+			check(Config.Resources.ById[recipe.output.resourceId] ~= nil,
+				("recipe %s produces unknown resource %s"):format(recipe.id, tostring(recipe.output.resourceId)))
+		elseif recipe.output.kind == "consumable" then
+			check(Config.Recipes.Consumables[recipe.output.consumableId] ~= nil,
+				("recipe %s produces unknown consumable %s"):format(recipe.id, tostring(recipe.output.consumableId)))
+		end
+	end
+
+	-- An achievement whose source names something that does not exist can never be
+	-- earned, and an unearnable achievement is worse than no achievement: it is a
+	-- permanent hole in a completion percentage.
+	local achievementCategories = {}
+	for _, category in ipairs(Config.Achievements.Categories) do
+		achievementCategories[category.id] = true
+	end
+
+	for _, achievement in ipairs(Config.Achievements.List) do
+		check(achievementCategories[achievement.category] ~= nil,
+			("achievement %s sits in unknown category %s"):format(achievement.id, tostring(achievement.category)))
+		check((achievement.target or 1) > 0,
+			("achievement %s has a non-positive target"):format(achievement.id))
+
+		local source = achievement.source
+		if source.kind == "storm_capture" then
+			check(Config.StormTypes.ById[source.stormId] ~= nil,
+				("achievement %s watches unknown storm %s"):format(achievement.id, tostring(source.stormId)))
+		elseif source.kind == "quest" then
+			check(Config.Quests.ById[source.questId] ~= nil,
+				("achievement %s watches unknown quest %s"):format(achievement.id, tostring(source.questId)))
+		elseif source.kind == "collection" then
+			check(source.key ~= nil,
+				("achievement %s counts an unnamed collection"):format(achievement.id))
+		elseif source.kind == "record" then
+			check(source.key ~= nil,
+				("achievement %s reads an unnamed record"):format(achievement.id))
+		end
+	end
+
+	-- "Earn half the achievements" has to keep meaning half.
+	local halfTarget = math.floor(#Config.Achievements.List / 2)
+	for _, achievement in ipairs(Config.Achievements.List) do
+		if achievement.source.kind == "collection" and achievement.source.key == "achievements" then
+			check(achievement.target == halfTarget,
+				("achievement %s targets %d of %d achievements; half is %d")
+					:format(achievement.id, achievement.target, #Config.Achievements.List, halfTarget))
 		end
 	end
 

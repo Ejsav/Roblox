@@ -91,6 +91,10 @@ function NotificationController:Start()
 		self:ShowAnnouncement(payload)
 	end))
 
+	self._maid:Add(Net.OnClientEvent("AchievementEarned", function(payload)
+		self:ShowAchievement(payload)
+	end))
+
 	self._maid:Add(Net.OnClientEvent("CaptureResult", function(result)
 		-- Drops from a capture reveal individually, because a legendary arriving
 		-- mid-run is the moment the whole loot system is built around.
@@ -429,6 +433,106 @@ function NotificationController:ShowItemReveal(view: any)
 	end)
 end
 
+--[[
+	An achievement completing takes the same reveal surface a legendary drop uses.
+	Sharing it is deliberate: the game has exactly one "stop and look at this"
+	moment, and having two competing ones would dilute both — and could stack them
+	on top of each other, since a legendary drop is a common way to complete an
+	achievement in the first place.
+]]
+function NotificationController:ShowAchievement(payload: any)
+	if not payload then
+		return
+	end
+
+	local color = payload.hidden and Theme.Color.sigils or Theme.Color.accent
+
+	self._revealRarity.Text = payload.hidden and "HIDDEN ACHIEVEMENT" or "ACHIEVEMENT"
+	self._revealRarity.TextColor3 = color
+	self._revealName.Text = payload.name or ""
+	self._revealName.TextColor3 = color
+	self._revealSlot.Text = string.upper(payload.description or "")
+
+	self._revealStats:ClearAllChildren()
+	Components.List(self._revealStats, { gap = 2, alignX = Enum.HorizontalAlignment.Center })
+
+	local order = 0
+	for _, reward in ipairs(payload.rewards or {}) do
+		order += 1
+		if order > 4 then
+			break
+		end
+
+		local text, rewardColor
+		if reward.kind == "currency" then
+			text = ("+%s %s"):format(Theme.FormatNumber(reward.amount), string.upper(reward.id))
+			rewardColor = Theme.Color[reward.id] or Theme.Color.accent
+		else
+			text = ('TITLE UNLOCKED — "%s"'):format(reward.name or reward.id)
+			rewardColor = Theme.Color.warning
+		end
+
+		Components.Text({
+			parent = self._revealStats,
+			name = "Reward" .. order,
+			text = text,
+			size = UDim2.new(1, 0, 0, 15),
+			textSize = Theme.Text.label,
+			color = rewardColor,
+			alignX = Enum.TextXAlignment.Center,
+			layoutOrder = order,
+			zIndex = self._revealStats.ZIndex + 1,
+		})
+	end
+
+	if payload.completion then
+		order += 1
+		Components.Text({
+			parent = self._revealStats,
+			name = "Completion",
+			text = ("%d of %d achievements"):format(payload.completion.earned, payload.completion.total),
+			size = UDim2.new(1, 0, 0, 15),
+			textSize = Theme.Text.caption,
+			color = Theme.Color.textTertiary,
+			alignX = Enum.TextXAlignment.Center,
+			layoutOrder = order,
+			zIndex = self._revealStats.ZIndex + 1,
+		})
+	end
+
+	local stroke = self._revealPanel:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = color
+		stroke.Thickness = Theme.Stroke.thick
+	end
+
+	self._reveal.Visible = true
+	self._reveal.Size = UDim2.fromOffset(380, 180)
+	TweenService:Create(self._reveal, Theme.Tween("slow", "enter"), {
+		Size = UDim2.fromOffset(420, 200),
+	}):Play()
+	Components.FadeIn(self._revealPanel, { duration = "slow" })
+
+	if self._audio then
+		self._audio:PlayUi("drop_legendary")
+	end
+
+	if self._revealTask then
+		task.cancel(self._revealTask)
+	end
+	self._revealTask = task.delay(4.5, function()
+		for _, descendant in ipairs(self._reveal:GetDescendants()) do
+			if descendant:IsA("TextLabel") then
+				TweenService:Create(descendant, Theme.Tween("slow", "exit"), { TextTransparency = 1 }):Play()
+			end
+		end
+		TweenService:Create(self._revealPanel, Theme.Tween("slow", "exit"), { BackgroundTransparency = 1 }):Play()
+		task.wait(Theme.Duration.slow)
+		self._reveal.Visible = false
+		self._revealTask = nil
+	end)
+end
+
 -- ============================================================================
 -- Server announcements
 -- ============================================================================
@@ -470,6 +574,13 @@ function NotificationController:ShowAnnouncement(payload: any)
 	elseif payload.kind == "prestige" then
 		color = Theme.Color.sigils
 		text = ("%s reached <b>Prestige %d — %s</b>"):format(payload.playerName, payload.rank, payload.rankName)
+	elseif payload.kind == "achievement" then
+		-- A hidden achievement names itself once someone finds it: that is the point
+		-- at which the rest of the server learns it was ever there.
+		color = Theme.Color.accent
+		text = payload.hidden
+			and ("%s found the hidden <b>%s</b>"):format(payload.playerName, payload.achievementName)
+			or ("%s earned <b>%s</b>"):format(payload.playerName, payload.achievementName)
 	elseif payload.kind == "event" then
 		color = Theme.Color.warning
 		text = payload.regionName

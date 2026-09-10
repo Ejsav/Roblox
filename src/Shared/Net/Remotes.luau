@@ -389,6 +389,31 @@ Remotes.Definitions = {
 		description = "A discovery registered; client plays the reveal.",
 	},
 
+	-- =============================================================== ACHIEVEMENTS
+	RequestAchievements = {
+		direction = "C2SF",
+		rateLimit = { budget = 4, refill = 0.5 },
+		description = "Fetch the achievement panel, including masked hidden entries.",
+		-- Declared empty rather than omitted: an absent schema and a schema that
+		-- accepts nothing behave identically at the gateway, but only one of them
+		-- says so on purpose.
+		args = {},
+	},
+
+	RequestEquipTitle = {
+		direction = "C2S",
+		rateLimit = { budget = 8, refill = 1 },
+		description = "Wear an owned title, or clear the current one with an empty id.",
+		args = {
+			V.String(0, 64),                -- title id, empty to clear
+		},
+	},
+
+	AchievementEarned = {
+		direction = "S2C",
+		description = "An achievement completed; client plays the unlock sequence.",
+	},
+
 	-- ================================================================ LEADERBOARDS
 	RequestLeaderboard = {
 		direction = "C2SF",
