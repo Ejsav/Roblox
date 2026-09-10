@@ -53,6 +53,10 @@ function ServiceRegistry:Register(service: Service)
 	assert(type(service.Name) == "string" and #service.Name > 0, "service needs a Name")
 	assert(not self._services[service.Name], "duplicate service: " .. service.Name)
 
+	-- Inject the registry so services resolve their dependencies through
+	-- `self.Registry:Get("Other")` rather than reaching for a global.
+	;(service :: any).Registry = self
+
 	self._services[service.Name] = service
 	return service
 end

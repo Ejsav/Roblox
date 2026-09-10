@@ -315,7 +315,9 @@ Balance.Storms = {
 
 	-- Strike cadence inside a live cell.
 	STRIKE_INTERVAL_RANGE = { min = 2.6, max = 7.5 },
-	STRIKE_INTERVAL_INTENSITY_SCALE = 0.55,
+	-- How strongly a cell's intensity compresses the gap between its strikes.
+	-- Higher values make a dangerous region feel fast rather than merely damaging.
+	STRIKE_INTERVAL_SCALE_FALLBACK = 0.55,
 
 	-- A cell's charge pool depletes as players take from it, then recovers. This
 	-- stops a single cell being farmed indefinitely by one player.
