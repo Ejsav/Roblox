@@ -85,6 +85,14 @@ function ProgressionService:AwardXp(player: Player, baseAmount: number, source: 
 		multiplier *= events:GetXpMultiplier(player)
 	end
 
+	-- Running with people nearby is worth a little more. Deliberately a small
+	-- multiplier: enough that a group notices, never enough that playing alone
+	-- feels like falling behind.
+	local party = self.Registry:Find("PartyService")
+	if party then
+		multiplier *= party:GetXpMultiplier(player)
+	end
+
 	local amount = baseAmount * multiplier
 	local previousLevel = profile.level
 

@@ -63,7 +63,16 @@ function LootService:_getEffectiveLuck(player: Player, tableId: string): number
 		return base
 	end
 	local pity = profile.pity[tableId] or 0
-	return base + math.min(Balance.Loot.PITY_CAP, pity)
+
+	-- Party luck is added outside the pity cap on purpose: pity is a floor the game
+	-- guarantees a solo player, and a group should not eat into it.
+	local shared = 0
+	local party = self.Registry:Find("PartyService")
+	if party then
+		shared = party:GetSharedLuck(player)
+	end
+
+	return base + math.min(Balance.Loot.PITY_CAP, pity) + shared
 end
 
 --[[ Advances or resets pity based on what the roll produced. ]]

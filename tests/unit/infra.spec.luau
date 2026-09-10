@@ -647,3 +647,113 @@ describe("Data/ProfileSchema", function()
 		expect(type(profile.inventory)):equal("table")
 	end)
 end)
+
+-- ============================================================================
+-- Admin authorisation
+-- ============================================================================
+
+local AdminService = loadModule("Server/Services/AdminService")
+
+local function makeAdminService()
+	local service = setmetatable({}, { __index = AdminService })
+	service.Registry = {
+		Get = function() return nil end,
+		Find = function() return nil end,
+		GetAll = function() return {} end,
+	}
+	AdminService.Init(service)
+	service._data = {
+		GetProfile = function() return nil end,
+		MarkDirty = function() end,
+	}
+	return service
+end
+
+describe("AdminService", function()
+	it("refuses every command from an unauthorised player", function()
+		local service = makeAdminService()
+		local player = { UserId = 987654, Name = "Nobody", DisplayName = "Nobody" }
+
+		-- Not the place owner, not on the allowlist.
+		expect(service:IsAuthorised(player)):falsy()
+
+		local ok = service:Execute(player, "help", {})
+		expect(ok):falsy()
+	end)
+
+	it("logs a refusal so an attempt is never silent", function()
+		local service = makeAdminService()
+		local player = { UserId = 987655, Name = "Nobody", DisplayName = "Nobody" }
+
+		service:Execute(player, "give", { "watts", "1000000" })
+
+		local log = service:GetLog()
+		expect(#log):equal(1)
+		expect(log[1].ok):equal(false)
+		expect(log[1].command):equal("give")
+	end)
+
+	it("never grants anything on the refusal path", function()
+		local service = makeAdminService()
+		local awarded = false
+		service.Registry.Get = function()
+			return { Award = function() awarded = true end }
+		end
+
+		local player = { UserId = 987656, Name = "Nobody", DisplayName = "Nobody" }
+		service:Execute(player, "give", { "watts", "1000000" })
+
+		expect(awarded):equal(false)
+	end)
+
+	it("caches an authorisation answer per player", function()
+		local service = makeAdminService()
+		local player = { UserId = 987657, Name = "Nobody", DisplayName = "Nobody" }
+
+		service:IsAuthorised(player)
+		expect(service._authCache[987657]):equal(false)
+	end)
+
+	it("marks every granting command as Studio-only", function()
+		local service = makeAdminService()
+
+		local sawGranting = false
+		for _, command in ipairs(service:GetCommands()) do
+			if command.studioOnly then
+				sawGranting = true
+			end
+		end
+		-- If no command is Studio-gated, the gate has been lost.
+		expect(sawGranting):equal(true)
+
+		-- Everything that can create value must be gated. Named explicitly so
+		-- adding an ungated granting command fails here rather than in production.
+		local mustBeGated = { give = true, xp = true, unlock = true, storm = true, event = true }
+		for _, command in ipairs(service:GetCommands()) do
+			if mustBeGated[command.name] and not command.studioOnly then
+				error(command.name .. " grants value but is not Studio-only")
+			end
+		end
+	end)
+
+	it("gives every command a usage line", function()
+		local service = makeAdminService()
+		for _, command in ipairs(service:GetCommands()) do
+			expect(command.usage):typeOf("string")
+			expect(command.summary):typeOf("string")
+			if #command.usage == 0 then
+				error(command.name .. " has an empty usage line")
+			end
+		end
+	end)
+
+	it("bounds the log rather than growing without limit", function()
+		local service = makeAdminService()
+		local player = { UserId = 987658, Name = "Nobody", DisplayName = "Nobody" }
+
+		for _ = 1, 260 do
+			service:Execute(player, "help", {})
+		end
+		expect(#service:GetLog()):lessThan(220)
+	end)
+end)

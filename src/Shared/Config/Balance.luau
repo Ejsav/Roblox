@@ -357,6 +357,35 @@ Balance.Events = {
 -- NETWORKING & SECURITY
 -- ============================================================================
 
+--[[
+	PARTIES
+
+	Four, because the storm mechanics that need more than one player (chained
+	captures, containment relays, the three-runner Core Pulse) all top out around
+	three, and a fourth seat means a group of friends never has to leave someone
+	out. Beyond that a party stops being a group and becomes a crowd standing on
+	the same strike.
+]]
+Balance.Party = {
+	MAX_SIZE = 4,
+
+	-- How close a member must be to share in the party's benefits, in studs. Wide
+	-- enough that runners taking different lines through a region stay together,
+	-- tight enough that a member idling at the bank contributes nothing.
+	SHARE_RADIUS = 320,
+
+	-- Bonus experience per additional nearby member. Deliberately modest: playing
+	-- together should be worth doing, never mandatory to keep pace.
+	XP_BONUS_PER_MEMBER = 0.08,
+	MAX_XP_BONUS = 0.24,
+
+	-- Loot found by a nearby member gives everyone else a small extra roll chance.
+	SHARED_LUCK_PER_MEMBER = 0.04,
+
+	INVITE_EXPIRY_SECONDS = 60,
+	MAX_PENDING_INVITES = 6,
+}
+
 Balance.Network = {
 	-- Per-remote rate limits: { budget, refillPerSecond }. Exceeding the budget drops
 	-- the request and increments a suspicion counter.

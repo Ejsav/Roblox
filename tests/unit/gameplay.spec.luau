@@ -1233,3 +1233,257 @@ describe("LeaderboardService", function()
 		end
 	end)
 end)
+
+-- ============================================================================
+-- Parties
+-- ============================================================================
+
+local PartyService = loadModule("Server/Services/PartyService")
+
+local function makePartyService()
+	local service = setmetatable({}, { __index = PartyService })
+	service.Registry = {
+		Get = function() return nil end,
+		Find = function() return nil end,
+	}
+	PartyService.Init(service)
+	service._data = {
+		GetProfile = function() return ProfileSchema.CreateDefault(1) end,
+		MarkDirty = function() end,
+	}
+	return service
+end
+
+--[[ A player the mock's Players service can find by user id. ]]
+local function makeJoinedPlayer(userId, name)
+	local player = Instance.new("Player")
+	player.Name = name
+	player.DisplayName = name
+	player.UserId = userId
+	player.Parent = game:GetService("Players")
+	return player
+end
+
+describe("PartyService", function()
+	it("refuses an invite to somebody who is not here", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(101, "A")
+
+		local ok = service:Invite(a, 999999)
+		expect(ok):falsy()
+		a:Destroy()
+	end)
+
+	it("refuses an invite to yourself", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(102, "A")
+
+		expect(service:Invite(a, 102)):falsy()
+		a:Destroy()
+	end)
+
+	it("forms a party when an invite is accepted", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(103, "A")
+		local b = makeJoinedPlayer(104, "B")
+
+		expect(service:Invite(a, 104)):ok()
+
+		local inviteId
+		for id in pairs(service._invites) do
+			inviteId = id
+		end
+		expect(inviteId):typeOf("string")
+
+		expect(service:RespondToInvite(b, inviteId, true)):ok()
+
+		local party = service:GetPartyFor(a)
+		expect(party):ok()
+		expect(#party.members):equal(2)
+		expect(party.leaderId):equal(103)
+		expect(service:GetPartyId(104)):equal(party.id)
+
+		a:Destroy()
+		b:Destroy()
+	end)
+
+	it("consumes the invite whether it is accepted or declined", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(105, "A")
+		local b = makeJoinedPlayer(106, "B")
+
+		service:Invite(a, 106)
+		local inviteId
+		for id in pairs(service._invites) do
+			inviteId = id
+		end
+
+		service:RespondToInvite(b, inviteId, false)
+		expect(service._invites[inviteId]):isNil()
+		expect(service:GetPartyId(106)):isNil()
+
+		a:Destroy()
+		b:Destroy()
+	end)
+
+	it("refuses an invite answered by the wrong player", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(107, "A")
+		local b = makeJoinedPlayer(108, "B")
+		local c = makeJoinedPlayer(109, "C")
+
+		service:Invite(a, 108)
+		local inviteId
+		for id in pairs(service._invites) do
+			inviteId = id
+		end
+
+		-- C answering B's invite must not put C in the party.
+		expect(service:RespondToInvite(c, inviteId, true)):falsy()
+		expect(service:GetPartyId(109)):isNil()
+		expect(service._invites[inviteId]):ok()
+
+		a:Destroy()
+		b:Destroy()
+		c:Destroy()
+	end)
+
+	it("refuses a second invite to the same person from the same inviter", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(110, "A")
+		local b = makeJoinedPlayer(111, "B")
+
+		expect(service:Invite(a, 111)):ok()
+		expect(service:Invite(a, 111)):falsy()
+
+		a:Destroy()
+		b:Destroy()
+	end)
+
+	it("dissolves a party rather than leaving one member alone in it", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(112, "A")
+		local b = makeJoinedPlayer(113, "B")
+
+		service:Invite(a, 113)
+		local inviteId
+		for id in pairs(service._invites) do
+			inviteId = id
+		end
+		service:RespondToInvite(b, inviteId, true)
+
+		service:Leave(b)
+		expect(service:GetPartyId(112)):isNil()
+		expect(service:GetPartyId(113)):isNil()
+
+		a:Destroy()
+		b:Destroy()
+	end)
+
+	it("passes leadership on rather than dissolving when a leader leaves", function()
+		local service = makePartyService()
+		local players = {}
+		for index = 1, 3 do
+			players[index] = makeJoinedPlayer(200 + index, "P" .. index)
+		end
+
+		for index = 2, 3 do
+			service:Invite(players[1], 200 + index)
+			local inviteId
+			for id, invite in pairs(service._invites) do
+				if invite.toUserId == 200 + index then
+					inviteId = id
+				end
+			end
+			service:RespondToInvite(players[index], inviteId, true)
+		end
+
+		local party = service:GetPartyFor(players[1])
+		expect(#party.members):equal(3)
+
+		service:Leave(players[1])
+		local remaining = service:GetPartyFor(players[2])
+		expect(remaining):ok()
+		expect(#remaining.members):equal(2)
+		expect(remaining.leaderId):equal(202)
+
+		for _, player in ipairs(players) do
+			player:Destroy()
+		end
+	end)
+
+	it("caps a party at its maximum", function()
+		local service = makePartyService()
+		local players = {}
+		for index = 1, 5 do
+			players[index] = makeJoinedPlayer(300 + index, "Q" .. index)
+		end
+
+		for index = 2, 5 do
+			service:Invite(players[1], 300 + index)
+			local inviteId
+			for id, invite in pairs(service._invites) do
+				if invite.toUserId == 300 + index then
+					inviteId = id
+				end
+			end
+			if inviteId then
+				service:RespondToInvite(players[index], inviteId, true)
+			end
+		end
+
+		local party = service:GetPartyFor(players[1])
+		expect(#party.members):equal(4)
+		expect(service:GetPartyId(305)):isNil()
+
+		for _, player in ipairs(players) do
+			player:Destroy()
+		end
+	end)
+
+	it("gives no bonus to a solo runner", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(400, "Solo")
+
+		expect(service:GetXpMultiplier(a)):equal(1)
+		expect(service:GetSharedLuck(a)):equal(0)
+
+		a:Destroy()
+	end)
+
+	it("cleans up membership and invites when a player disconnects", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(401, "A")
+		local b = makeJoinedPlayer(402, "B")
+
+		service:Invite(a, 402)
+		service:_onPlayerLeft(401)
+
+		expect(service:GetPartyId(401)):isNil()
+		local remaining = 0
+		for _ in pairs(service._invites) do
+			remaining += 1
+		end
+		expect(remaining):equal(0)
+
+		a:Destroy()
+		b:Destroy()
+	end)
+
+	it("expires an invite nobody answered", function()
+		local service = makePartyService()
+		local a = makeJoinedPlayer(403, "A")
+		local b = makeJoinedPlayer(404, "B")
+
+		service:Invite(a, 404)
+		for _, invite in pairs(service._invites) do
+			invite.expiresAt = os.clock() - 1
+		end
+
+		service:Tick()
+		expect(next(service._invites)):isNil()
+
+		a:Destroy()
+		b:Destroy()
+	end)
+end)
