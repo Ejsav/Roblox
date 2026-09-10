@@ -196,6 +196,18 @@ function RegionService:_onRegionEntered(player: Player, regionId: string, previo
 		self._quests:NotifyReach(player, { region = regionId })
 	end
 
+	-- Arriving in a region does not itself discover its relay — the player still
+	-- has to reach the pad — but the interaction service is told to start looking.
+	local interaction = self.Registry:Find("InteractionService")
+	if interaction and region.fastTravel then
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local pad = Vector3.new(region.fastTravel.position.X, region.fastTravel.position.Y, region.fastTravel.position.Z)
+		if root and ((root :: BasePart).Position - pad).Magnitude <= 40 then
+			interaction:DiscoverFastTravel(player, region.fastTravel.id)
+		end
+	end
+
 	if firstVisit and self._progression then
 		-- First arrival in a region is worth real XP; it is often the payoff for a
 		-- long, dangerous traversal.

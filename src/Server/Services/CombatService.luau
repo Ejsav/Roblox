@@ -411,6 +411,15 @@ function CombatService:Kill(player: Player, source: string)
 		self._data:MarkDirty(player)
 	end
 
+	-- The cache is what turns a death into a recoverable setback rather than a
+	-- clean loss, so it is spawned before anything else reacts to the death.
+	if summary and summary.cached and summary.cached > 0 then
+		local interaction = self.Registry:Find("InteractionService")
+		if interaction then
+			interaction:SpawnCache(player.UserId, position, summary.cached)
+		end
+	end
+
 	self.Died:Fire(player, source, summary, position)
 
 	Net.FireClient(player, "Notification", {

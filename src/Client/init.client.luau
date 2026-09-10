@@ -47,6 +47,7 @@ local CONTROLLER_MODULES = {
 	{ folder = ControllersFolder, name = "AudioController" },
 	{ folder = ControllersFolder, name = "StormController" },
 	{ folder = ControllersFolder, name = "MovementController" },
+	{ folder = ControllersFolder, name = "InteractionController" },
 	{ folder = ControllersFolder, name = "HudController" },
 	{ folder = ControllersFolder, name = "MenuController" },
 }
@@ -82,7 +83,7 @@ _G.BTS_CLIENT = { Registry = registry }
 	read it, and the HUD reads both.
 ]]
 local updateOrder = {}
-for _, name in ipairs({ "MovementController", "StormController", "VfxController", "AudioController", "HudController", "MenuController" }) do
+for _, name in ipairs({ "MovementController", "StormController", "InteractionController", "VfxController", "AudioController", "HudController", "MenuController" }) do
 	local controller = registry:Find(name)
 	if controller and type((controller :: any).Update) == "function" then
 		table.insert(updateOrder, controller)

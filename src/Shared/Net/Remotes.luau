@@ -287,6 +287,21 @@ Remotes.Definitions = {
 		description = "A quest finished; client plays the completion sequence.",
 	},
 
+	-- ================================================================ INTERACTION
+	RequestInteract = {
+		direction = "C2S",
+		rateLimit = { budget = 8, refill = 3 },
+		description = "Use a nearby interactable: bank, relay, quest object, cache.",
+		args = {
+			V.String(1, 64),        -- interactable id
+		},
+	},
+
+	InteractionManifest = {
+		direction = "S2C",
+		description = "The interactables in the world, so the client can resolve prompts locally.",
+	},
+
 	-- ====================================================================== TRAVEL
 	RequestFastTravel = {
 		direction = "C2S",

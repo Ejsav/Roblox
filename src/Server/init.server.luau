@@ -94,6 +94,7 @@ local SERVICE_MODULES = {
 	"MasteryService",
 	"WorldEventService",
 	"PrestigeService",
+	"InteractionService",
 
 	-- Lifecycle (last, because it is what admits players)
 	"PlayerService",
