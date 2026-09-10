@@ -29,6 +29,7 @@ local UpgradesScreen = require(Client.UI.Screens.UpgradesScreen)
 local SkillsScreen = require(Client.UI.Screens.SkillsScreen)
 local InventoryScreen = require(Client.UI.Screens.InventoryScreen)
 local QuestScreen = require(Client.UI.Screens.QuestScreen)
+local CodexScreen = require(Client.UI.Screens.CodexScreen)
 
 local MenuController = {}
 MenuController.Name = "MenuController"
@@ -44,6 +45,7 @@ local MENUS = {
 	{ id = "skills", name = "SKILLS", action = "skills" },
 	{ id = "inventory", name = "EQUIPMENT", action = "inventory" },
 	{ id = "quests", name = "QUESTS", action = "quests" },
+	{ id = "codex", name = "CODEX", action = "codex" },
 }
 
 function MenuController:Init()
@@ -105,6 +107,7 @@ function MenuController:Start()
 	self._screens.skills = SkillsScreen.new(self._container, self.Registry:GetAll())
 	self._screens.inventory = InventoryScreen.new(self._container, self.Registry:GetAll())
 	self._screens.quests = QuestScreen.new(self._container, self.Registry:GetAll())
+	self._screens.codex = CodexScreen.new(self._container, self.Registry:GetAll())
 
 	for _, screen in pairs(self._screens) do
 		screen:SetVisible(false)
@@ -220,6 +223,14 @@ function MenuController:_bindNetwork()
 		self._screens.quests:SetView(view)
 	end))
 
+	-- An achievement landing while the codex is open should be visible there
+	-- immediately, not on the next open.
+	maid:Add(Net.OnClientEvent("AchievementEarned", function()
+		if self._open == "codex" then
+			self._screens.codex:RequestRefresh()
+		end
+	end))
+
 	-- Currency changes arrive through several paths; the upgrade screen needs all
 	-- of them or its affordability states go stale mid-session.
 	maid:Add(Net.OnClientEvent("BankResult", function(result)
@@ -238,6 +249,7 @@ function MenuController:_distributeProfile()
 	self._screens.upgrades:SetProfile(self._profile, self._stats)
 	self._screens.skills:SetProfile(self._profile)
 	self._screens.quests:SetProfile(self._profile)
+	self._screens.codex:SetProfile(self._profile)
 end
 
 -- ============================================================================
@@ -279,6 +291,13 @@ function MenuController:Open(menuId: string)
 	end
 	for id, button in pairs(self._tabButtons) do
 		button:SetEnabled(id ~= menuId)
+	end
+
+	-- A screen that needs to fetch something on open says so with OnOpened, rather
+	-- than hiding the request inside SetVisible where nothing can call it safely.
+	local opened = self._screens[menuId]
+	if type((opened :: any).OnOpened) == "function" then
+		opened:OnOpened()
 	end
 
 	if not wasOpen then

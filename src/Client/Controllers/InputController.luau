@@ -136,6 +136,12 @@ local ACTIONS = {
 		keyboard = Enum.KeyCode.U,
 		gamepad = Enum.KeyCode.DPadDown,
 	},
+	codex = {
+		label = "Codex",
+		keyboard = Enum.KeyCode.L,
+		-- No gamepad binding: the four d-pad directions are spent, and the codex is
+		-- the one menu nobody needs to reach in a hurry. It is on the tab bar.
+	},
 	closeMenu = {
 		label = "Close",
 		keyboard = Enum.KeyCode.Escape,
@@ -218,6 +224,7 @@ function InputController:_handleAction(actionId: string, state: Enum.UserInputSt
 		or actionId == "inventory"
 		or actionId == "skills"
 		or actionId == "quests"
+		or actionId == "codex"
 		or actionId == "upgrades"
 
 	if self._menuOpen and not isMenuAction then
