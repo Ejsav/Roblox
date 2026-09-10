@@ -28,6 +28,7 @@ local MapScreen = require(Client.UI.Screens.MapScreen)
 local UpgradesScreen = require(Client.UI.Screens.UpgradesScreen)
 local SkillsScreen = require(Client.UI.Screens.SkillsScreen)
 local InventoryScreen = require(Client.UI.Screens.InventoryScreen)
+local QuestScreen = require(Client.UI.Screens.QuestScreen)
 
 local MenuController = {}
 MenuController.Name = "MenuController"
@@ -42,6 +43,7 @@ local MENUS = {
 	{ id = "upgrades", name = "UPGRADES", action = "upgrades" },
 	{ id = "skills", name = "SKILLS", action = "skills" },
 	{ id = "inventory", name = "EQUIPMENT", action = "inventory" },
+	{ id = "quests", name = "QUESTS", action = "quests" },
 }
 
 function MenuController:Init()
@@ -102,6 +104,7 @@ function MenuController:Start()
 	self._screens.upgrades = UpgradesScreen.new(self._container, self.Registry:GetAll())
 	self._screens.skills = SkillsScreen.new(self._container, self.Registry:GetAll())
 	self._screens.inventory = InventoryScreen.new(self._container, self.Registry:GetAll())
+	self._screens.quests = QuestScreen.new(self._container, self.Registry:GetAll())
 
 	for _, screen in pairs(self._screens) do
 		screen:SetVisible(false)
@@ -115,11 +118,19 @@ function MenuController:Start()
 	self:_bindNetwork()
 end
 
+local TAB_WIDTH = 122
+local TAB_HEIGHT = 36
+local CLOSE_WIDTH = 40
+
 function MenuController:_buildTabBar()
+	-- Derived rather than fixed, so adding a menu widens the bar instead of
+	-- silently clipping the last tab.
+	local barWidth = #MENUS * TAB_WIDTH + CLOSE_WIDTH + (#MENUS) * Theme.Space.xs
+
 	local bar = Components.Container({
 		parent = self._screenGui,
 		name = "TabBar",
-		size = UDim2.fromOffset(560, 40),
+		size = UDim2.fromOffset(barWidth, 40),
 		position = UDim2.new(0.5, 0, 0, Theme.Space.sm),
 		anchorPoint = Vector2.new(0.5, 0),
 		zIndex = Theme.ZIndex.panel + 10,
@@ -138,7 +149,7 @@ function MenuController:_buildTabBar()
 			name = menu.id,
 			text = menu.name,
 			variant = "ghost",
-			size = UDim2.fromOffset(122, 36),
+			size = UDim2.fromOffset(TAB_WIDTH, TAB_HEIGHT),
 			textSize = Theme.Text.label,
 			layoutOrder = index,
 			zIndex = bar.ZIndex + 1,
@@ -154,7 +165,7 @@ function MenuController:_buildTabBar()
 		name = "close",
 		text = "✕",
 		variant = "ghost",
-		size = UDim2.fromOffset(40, 36),
+		size = UDim2.fromOffset(CLOSE_WIDTH, TAB_HEIGHT),
 		textSize = Theme.Text.body,
 		layoutOrder = 99,
 		zIndex = bar.ZIndex + 1,
@@ -205,6 +216,10 @@ function MenuController:_bindNetwork()
 		self._screens.inventory:SetView(view, self._stats)
 	end))
 
+	maid:Add(Net.OnClientEvent("QuestUpdate", function(view)
+		self._screens.quests:SetView(view)
+	end))
+
 	-- Currency changes arrive through several paths; the upgrade screen needs all
 	-- of them or its affordability states go stale mid-session.
 	maid:Add(Net.OnClientEvent("BankResult", function(result)
@@ -222,6 +237,7 @@ function MenuController:_distributeProfile()
 	self._screens.map:SetProfile(self._profile)
 	self._screens.upgrades:SetProfile(self._profile, self._stats)
 	self._screens.skills:SetProfile(self._profile)
+	self._screens.quests:SetProfile(self._profile)
 end
 
 -- ============================================================================

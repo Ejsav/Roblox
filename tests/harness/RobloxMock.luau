@@ -745,6 +745,34 @@ local function newInstance(className, parent)
 	return self
 end
 
+--[[
+	GUI event names that a component may connect to. Constructing a screen touches
+	most of these, and a screen that cannot be constructed in a test is a screen
+	whose build path is never exercised until a player opens it.
+]]
+local GUI_EVENTS = {
+	Activated = true,
+	MouseButton1Click = true,
+	MouseButton1Down = true,
+	MouseButton1Up = true,
+	MouseButton2Click = true,
+	MouseEnter = true,
+	MouseLeave = true,
+	MouseMoved = true,
+	MouseWheelForward = true,
+	MouseWheelBackward = true,
+	SelectionGained = true,
+	SelectionLost = true,
+	TouchTap = true,
+	TouchLongPress = true,
+	TouchSwipe = true,
+	Triggered = true,
+	Destroying = true,
+	Heartbeat = true,
+	Stepped = true,
+	RenderStepped = true,
+}
+
 InstanceMt.__index = function(self, key)
 	local props = rawget(self, "_props")
 	if props[key] ~= nil then
@@ -765,7 +793,16 @@ InstanceMt.__index = function(self, key)
 		end
 	end
 	-- Common event names are lazily created so :Connect never errors in tests.
-	if key:match("^On") or key:match("Event$") or key:match("Changed$") or key:match("Began$") or key:match("Ended$") then
+	-- GUI input events are listed rather than pattern-matched: "Activated" and
+	-- "MouseEnter" share no useful shape with each other, and a pattern loose
+	-- enough to catch both would start swallowing genuine typos.
+	if GUI_EVENTS[key]
+		or key:match("^On")
+		or key:match("Event$")
+		or key:match("Changed$")
+		or key:match("Began$")
+		or key:match("Ended$")
+	then
 		local sig = newSignal()
 		signals[key] = sig
 		return sig
@@ -898,7 +935,22 @@ makeService("RunService", function(s)
 	s.UnbindFromRenderStep = function() end
 end)
 makeService("Players", function(s)
-	s.LocalPlayer = nil
+	-- A LocalPlayer with no Character, which is what a real client looks like
+	-- between joining and spawning. Client code reads LocalPlayer unconditionally
+	-- (it is never nil on a client) but must tolerate a nil Character, and this is
+	-- the state that catches the difference.
+	local localPlayer = newInstance("Player")
+	localPlayer.Name = "LocalPlayer"
+	localPlayer.UserId = 1
+	localPlayer.DisplayName = "LocalPlayer"
+	localPlayer.Character = nil
+
+	local playerGui = newInstance("ScreenGui", localPlayer)
+	playerGui.Name = "PlayerGui"
+
+	localPlayer.Parent = s
+
+	s.LocalPlayer = localPlayer
 	s.PlayerAdded = newSignal()
 	s.PlayerRemoving = newSignal()
 	s.GetPlayers = function()
@@ -995,6 +1047,14 @@ makeService("UserInputService", function(s)
 	s.InputEnded = newSignal()
 	s.InputChanged = newSignal()
 	s.LastInputTypeChanged = newSignal()
+	-- Touch gestures. Named individually because they do not share a suffix the
+	-- lazy signal rule could match.
+	s.TouchPinch = newSignal()
+	s.TouchPan = newSignal()
+	s.TouchTap = newSignal()
+	s.TouchLongPress = newSignal()
+	s.TouchSwipe = newSignal()
+	s.TouchRotate = newSignal()
 	s.GetConnectedGamepads = function()
 		return {}
 	end
