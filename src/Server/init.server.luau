@@ -92,6 +92,8 @@ local SERVICE_MODULES = {
 	"QuestService",
 	"DiscoveryService",
 	"MasteryService",
+	"WorldEventService",
+	"PrestigeService",
 
 	-- Lifecycle (last, because it is what admits players)
 	"PlayerService",

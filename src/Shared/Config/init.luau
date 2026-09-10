@@ -26,6 +26,8 @@ Config.Modifiers = require(script.Modifiers)
 Config.Quests = require(script.Quests)
 Config.LootTables = require(script.LootTables)
 Config.WorldEvents = require(script.WorldEvents)
+Config.Prestige = require(script.Prestige)
+Config.Theme = require(script.Theme)
 
 --[[
 	Verifies cross-references between content tables.
@@ -83,6 +85,34 @@ function Config.Verify(): (boolean, { string })
 				check(Config.Equipment.UniqueById[entry.id] ~= nil,
 					("loot table %s drops unknown unique %s"):format(lootTable.id, tostring(entry.id)))
 			end
+		end
+	end
+
+	-- Prestige skills must form a satisfiable graph, or a rank's rewards are
+	-- unreachable and the endgame silently dead-ends.
+	for _, skill in ipairs(Config.Prestige.Skills) do
+		for _, requiredId in ipairs(skill.requires) do
+			check(Config.Prestige.SkillById[requiredId] ~= nil,
+				("prestige skill %s requires unknown %s"):format(skill.id, requiredId))
+		end
+		for _, requiredId in ipairs(skill.requiresAny or {}) do
+			check(Config.Prestige.SkillById[requiredId] ~= nil,
+				("prestige skill %s requires unknown %s"):format(skill.id, requiredId))
+		end
+	end
+
+	for _, rank in ipairs(Config.Prestige.Ranks) do
+		if rank.grants.region then
+			check(Config.Regions.ById[rank.grants.region] ~= nil,
+				("prestige rank %d grants unknown region %s"):format(rank.rank, rank.grants.region))
+		end
+		if rank.grants.traversal then
+			check(Config.Traversal.ById[rank.grants.traversal] ~= nil,
+				("prestige rank %d grants unknown traversal %s"):format(rank.rank, rank.grants.traversal))
+		end
+		if rank.grants.item then
+			check(Config.Equipment.UniqueById[rank.grants.item] ~= nil,
+				("prestige rank %d grants unknown item %s"):format(rank.rank, rank.grants.item))
 		end
 	end
 

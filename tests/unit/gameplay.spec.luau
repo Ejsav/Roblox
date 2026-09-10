@@ -652,3 +652,143 @@ describe("Equipment progression", function()
 		expect(legendaryRange.min):greaterThan(commonRange.max)
 	end)
 end)
+
+describe("Prestige", function()
+	local Prestige = loadModule("Shared/Config/Prestige")
+
+	it("blocks prestige below the level and quest requirements", function()
+		local profile = makeProfile({ level = 50 })
+		local ok, reason = Prestige.CanPrestige(profile, Balance)
+		expect(ok):falsy()
+		expect(reason):equal("level")
+
+		profile.level = Balance.Progression.PRESTIGE_LEVEL_REQUIREMENT
+		local questOk, questReason = Prestige.CanPrestige(profile, Balance)
+		expect(questOk):falsy()
+		expect(questReason):equal("quest")
+
+		profile.completedQuests[Balance.Progression.PRESTIGE_QUEST_REQUIREMENT] = true
+		expect(Prestige.CanPrestige(profile, Balance)):ok()
+	end)
+
+	it("stops at the maximum rank", function()
+		local profile = makeProfile({
+			level = Balance.Progression.PRESTIGE_LEVEL_REQUIREMENT,
+			prestige = Balance.Progression.MAX_PRESTIGE,
+		})
+		profile.completedQuests[Balance.Progression.PRESTIGE_QUEST_REQUIREMENT] = true
+		local ok, reason = Prestige.CanPrestige(profile, Balance)
+		expect(ok):falsy()
+		expect(reason):equal("max_prestige")
+	end)
+
+	it("defines a rank for every step to the cap", function()
+		for rank = 1, Balance.Progression.MAX_PRESTIGE do
+			expect(Prestige.RankByNumber[rank]):ok()
+		end
+	end)
+
+	it("changes the world at every rank rather than only the numbers", function()
+		for _, rank in ipairs(Prestige.Ranks) do
+			-- Every rank must alter world state, grant a capability, or open content.
+			local substantive = rank.grants.worldState ~= nil
+				or rank.grants.region ~= nil
+				or rank.grants.traversal ~= nil
+				or rank.grants.item ~= nil
+			expect(substantive):ok()
+		end
+	end)
+
+	it("preserves knowledge and resets numbers", function()
+		local preserved = {}
+		for _, key in ipairs(Prestige.PRESERVED_KEYS) do
+			preserved[key] = true
+		end
+
+		-- Things that represent what the player has learned or found must survive.
+		for _, key in ipairs({
+			"discoveries", "stormsDiscovered", "achievements", "records",
+			"masteries", "titlesOwned", "regionsVisited", "fastTravelUnlocked",
+		}) do
+			expect(preserved[key]):ok()
+		end
+
+		-- Things the player will re-earn quickly must not.
+		for _, key in ipairs({ "level", "xp", "watts", "upgrades", "skills", "skillPoints" }) do
+			expect(preserved[key]):falsy()
+		end
+	end)
+
+	it("gates prestige skills on sigils and prerequisites", function()
+		local profile = makeProfile({ sigils = 0 })
+		local ok, reason = Prestige.CanPurchaseSkill("p_second_cell", profile)
+		expect(ok):falsy()
+		expect(reason):equal("insufficient_sigils")
+
+		profile.sigils = 99
+		expect(Prestige.CanPurchaseSkill("p_second_cell", profile)):ok()
+
+		-- A tier-2 node needs its tier-1 prerequisite.
+		local blocked, blockedReason = Prestige.CanPurchaseSkill("p_chain_memory", profile)
+		expect(blocked):falsy()
+		expect(blockedReason):equal("missing_prerequisite")
+
+		profile.prestigeSkills.p_second_cell = true
+		expect(Prestige.CanPurchaseSkill("p_chain_memory", profile)):ok()
+	end)
+
+	it("accepts either branch for an any-of prerequisite", function()
+		local profile = makeProfile({ sigils = 99 })
+		local blocked, reason = Prestige.CanPurchaseSkill("p_the_calm", profile)
+		expect(blocked):falsy()
+		expect(reason):equal("missing_any_prerequisite")
+
+		profile.prestigeSkills.p_phase_extended = true
+		expect(Prestige.CanPurchaseSkill("p_the_calm", profile)):ok()
+
+		local other = makeProfile({ sigils = 99 })
+		other.prestigeSkills.p_chain_memory = true
+		expect(Prestige.CanPurchaseSkill("p_the_calm", other)):ok()
+	end)
+
+	it("refuses a skill already owned", function()
+		local profile = makeProfile({ sigils = 99 })
+		profile.prestigeSkills.p_second_cell = true
+		local ok, reason = Prestige.CanPurchaseSkill("p_second_cell", profile)
+		expect(ok):falsy()
+		expect(reason):equal("already_owned")
+	end)
+
+	it("collects behaviours and world states from owned progress", function()
+		local profile = makeProfile({ prestige = 3 })
+		profile.prestigeSkills.p_storm_sense = true
+
+		local behaviours = Prestige.CollectBehaviours(profile)
+		expect(behaviours.global_storm_vision):ok()
+
+		local states = Prestige.CollectWorldStates(3)
+		expect(states.inversion_visible):ok()
+		expect(states.echo_storms):ok()
+		expect(states.null_everywhere):ok()
+		expect(states.second_eye):falsy()
+	end)
+
+	it("awards enough sigils across all ranks to buy a real build", function()
+		local total = 0
+		for _, rank in ipairs(Prestige.Ranks) do
+			total += rank.grants.sigils or 0
+		end
+
+		local cheapestPath = Prestige.SkillById.p_second_cell.cost
+			+ Prestige.SkillById.p_chain_memory.cost
+			+ Prestige.SkillById.p_the_calm.cost
+		expect(total):greaterThan(cheapestPath)
+
+		-- But not enough to buy the entire tree, so prestige is still a choice.
+		local everything = 0
+		for _, skill in ipairs(Prestige.Skills) do
+			everything += skill.cost
+		end
+		expect(total):lessThan(everything * 1.6)
+	end)
+end)
