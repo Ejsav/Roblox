@@ -1005,3 +1005,231 @@ describe("AchievementService", function()
 		expect(view.completion.total):equal(#AchievementConfig.List)
 	end)
 end)
+
+-- ============================================================================
+-- Leaderboards
+-- ============================================================================
+
+local LeaderboardService = loadModule("Server/Services/LeaderboardService")
+
+--[[
+	LeaderboardService with no DataStore behind it, which is the same path a Studio
+	session without API access takes: the in-memory board. Writes are recorded so a
+	spec can assert on write discipline, which is the part of this service that can
+	actually hurt a live game.
+]]
+local function makeLeaderboardService(profile)
+	local service = setmetatable({}, { __index = LeaderboardService })
+	service.Registry = {
+		Get = function() return nil end,
+		Find = function() return nil end,
+	}
+	LeaderboardService.Init(service)
+
+	service._data = {
+		GetProfile = function() return profile end,
+		MarkDirty = function() end,
+	}
+
+	-- Force the in-memory path without touching DataStoreService at all.
+	service._useMockStore = true
+	local writes = {}
+	service._write = function(this, board, userId, value)
+		table.insert(writes, { board = board.id, userId = userId, value = value })
+		return true
+	end
+
+	return service, writes
+end
+
+describe("LeaderboardService", function()
+	it("fans a record out to every board that reads it", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service:SubmitRecord(fakePlayer, "largestBank", 500)
+		expect(service._pendingWrites.largest_bank[1]):equal(500)
+	end)
+
+	it("ignores a record no board reads", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service:SubmitRecord(fakePlayer, "totalDeaths", 40)
+		for boardId, pending in pairs(service._pendingWrites) do
+			if pending[1] then
+				error("totalDeaths reached board " .. boardId)
+			end
+		end
+	end)
+
+	it("keeps only the best queued value", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service:Submit(fakePlayer, "largest_bank", 400)
+		service:Submit(fakePlayer, "largest_bank", 900)
+		service:Submit(fakePlayer, "largest_bank", 600)
+
+		expect(service._pendingWrites.largest_bank[1]):equal(900)
+	end)
+
+	it("refuses nonsense values", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service:Submit(fakePlayer, "largest_bank", -5)
+		service:Submit(fakePlayer, "largest_bank", 0)
+		service:Submit(fakePlayer, "largest_bank", 0 / 0)
+		expect(service._pendingWrites.largest_bank):isNil()
+	end)
+
+	it("writes once, then holds the next value behind the cooldown", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service, writes = makeLeaderboardService(profile)
+
+		service:Submit(fakePlayer, "largest_bank", 400)
+		expect(service:Flush()):equal(1)
+		expect(#writes):equal(1)
+
+		-- A better value arrives immediately. It must not produce a second write:
+		-- OrderedDataStore budgets are the whole reason this queue exists.
+		service:Submit(fakePlayer, "largest_bank", 900)
+		expect(service:Flush()):equal(0)
+		expect(#writes):equal(1)
+		-- ...and it is still queued, not discarded.
+		expect(service._pendingWrites.largest_bank[1]):equal(900)
+	end)
+
+	it("drops a queued value that is no better than what was written", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service:Submit(fakePlayer, "largest_bank", 900)
+		service:Flush()
+
+		service:Submit(fakePlayer, "largest_bank", 400)
+		service:Flush()
+		expect(service._pendingWrites.largest_bank[1]):isNil()
+	end)
+
+	it("writes a leaving player's queued value without waiting out the cooldown", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service, writes = makeLeaderboardService(profile)
+
+		service:Submit(fakePlayer, "largest_bank", 400)
+		service:Flush()
+		service:Submit(fakePlayer, "largest_bank", 900)
+
+		service:_flushPlayer(1)
+		expect(#writes):equal(2)
+		expect(writes[2].value):equal(900)
+		expect(service._pendingWrites.largest_bank[1]):isNil()
+	end)
+
+	it("submits every global board from a loaded profile", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.level = 20
+		profile.prestige = 2
+		profile.records.largestBank = 1200
+		profile.records.longestChain = 14
+
+		local service = makeLeaderboardService(profile)
+		service:SubmitAllFromProfile(fakePlayer)
+
+		expect(service._pendingWrites.level[1]):equal(20)
+		expect(service._pendingWrites.prestige[1]):equal(2)
+		expect(service._pendingWrites.largest_bank[1]):equal(1200)
+		expect(service._pendingWrites.longest_chain[1]):equal(14)
+	end)
+
+	it("measures a weekly board as progress since the week began", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		profile.records.totalBanked = 10000
+
+		local service = makeLeaderboardService(profile)
+
+		-- First sighting this week stamps the baseline, so the delta is zero rather
+		-- than the player's entire lifetime total.
+		service:SubmitRecord(fakePlayer, "totalBanked", 10000)
+		expect(profile.weeklyBaselines.total_banked_weekly.value):equal(10000)
+		expect(service._pendingWrites.total_banked_weekly):isNil()
+
+		-- All-time still sees the full figure.
+		expect(service._pendingWrites.total_banked[1]):equal(10000)
+
+		service:SubmitRecord(fakePlayer, "totalBanked", 12500)
+		expect(service._pendingWrites.total_banked_weekly[1]):equal(2500)
+	end)
+
+	it("re-baselines when the week rolls over and prunes the old key", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		profile.weeklyBaselines.total_banked_weekly = { key = "bts_total_banked_weekly_w0", value = 4000 }
+		service:SubmitRecord(fakePlayer, "totalBanked", 10000)
+
+		local baseline = profile.weeklyBaselines.total_banked_weekly
+		expect(baseline.value):equal(10000)
+		expect(baseline.key):equal(service:_storeKey(service._boards.total_banked_weekly))
+	end)
+
+	it("stamps a weekly key that changes weekly and an all-time key that does not", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		local weekly = service:_storeKey(service._boards.total_banked_weekly)
+		local alltime = service:_storeKey(service._boards.total_banked)
+
+		expect(weekly):contains("_w")
+		expect(alltime):equal("bts_total_banked")
+		-- Called twice in the same second it must be stable, or every read would miss.
+		expect(service:_storeKey(service._boards.total_banked_weekly)):equal(weekly)
+	end)
+
+	it("ranks a server board and breaks ties without churning", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		service._serverBoards.server_banked = {
+			{ rank = 1, userId = 2, name = "B", value = 900 },
+			{ rank = 2, userId = 1, name = "A", value = 400 },
+		}
+
+		local page = service:GetPage(fakePlayer, "server_banked", 1)
+		expect(#page.entries):equal(2)
+		expect(page.entries[1].userId):equal(2)
+		expect(page.viewerRank):equal(2)
+		expect(page.viewerValue):equal(400)
+		expect(page.scope):equal("server")
+	end)
+
+	it("returns nothing for an unknown board", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+		expect(service:GetPage(fakePlayer, "not_a_board", 1)):isNil()
+	end)
+
+	it("clamps a hostile page number into range", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+		service._serverBoards.server_banked = {}
+
+		expect(service:GetPage(fakePlayer, "server_banked", 0).page):equal(1)
+		expect(service:GetPage(fakePlayer, "server_banked", 9999).page):equal(10)
+		expect(service:GetPage(fakePlayer, "server_banked", -4).page):equal(1)
+	end)
+
+	it("declares every board it advertises", function()
+		local profile = ProfileSchema.CreateDefault(1)
+		local service = makeLeaderboardService(profile)
+
+		for _, board in ipairs(service:GetBoards()) do
+			expect(board.name):typeOf("string")
+			expect(board.description):typeOf("string")
+			if board.scope ~= "global" and board.scope ~= "server" then
+				error(board.id .. " has unknown scope " .. tostring(board.scope))
+			end
+		end
+	end)
+end)

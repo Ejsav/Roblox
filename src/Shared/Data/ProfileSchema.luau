@@ -122,6 +122,10 @@ function ProfileSchema.CreateDefault()
 		loreFound = {},
 		-- achievementId -> unix time earned
 		achievements = {},
+		-- boardId -> { key = "<week key>", value = n }. The lifetime figure a weekly
+		-- leaderboard measures from, so a weekly board on a lifetime counter shows
+		-- progress rather than repeating the all-time board.
+		weeklyBaselines = {},
 		-- titleId -> true
 		titlesOwned = {},
 		equippedTitle = nil,
@@ -544,6 +548,23 @@ function ProfileSchema.Validate(profile: any): { string }
 		elseif type(earnedAt) ~= "number" or earnedAt <= 0 then
 			-- The achievement is real, so it is kept; only the timestamp is repaired.
 			profile.achievements[achievementId] = 1
+		end
+	end
+
+	-- Weekly leaderboard baselines. A malformed entry is dropped rather than
+	-- repaired: the next submission re-stamps it from the current lifetime value,
+	-- which is exactly what a missing baseline means.
+	if type(profile.weeklyBaselines) ~= "table" then
+		profile.weeklyBaselines = {}
+	end
+	for boardId, entry in pairs(profile.weeklyBaselines) do
+		if type(entry) ~= "table"
+			or type(entry.key) ~= "string"
+			or type(entry.value) ~= "number"
+			or entry.value ~= entry.value
+			or entry.value < 0
+		then
+			profile.weeklyBaselines[boardId] = nil
 		end
 	end
 

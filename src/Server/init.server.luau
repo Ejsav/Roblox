@@ -97,6 +97,7 @@ local SERVICE_MODULES = {
 	"InteractionService",
 	"CraftingService",
 	"AchievementService",
+	"LeaderboardService",
 
 	-- Lifecycle (last, because it is what admits players)
 	"PlayerService",
